@@ -1,4 +1,5 @@
 # for tomorrow: fix xxx; save results as an excel table
+# tone down
 """
 
   simulate: simulates a user study to clarify the relationship between surprise
@@ -22,9 +23,9 @@ from collections import defaultdict
 from random      import seed, sample, choice, shuffle
 
 # parameters used in generating and handling the mocked dataset
-ECO_SEED  = 23
-ECO_MU    = 0.5
-ECO_SD    = 0.25
+ECO_SEED  = 23     # seed for the random number generator
+ECO_MU    = 0.5    # average value of a feature
+ECO_SD    = 0.25   # spread of values of a feature
 ECO_SPLIT = 0.2    # the fraction of the dataset that is allocated to the test partition
                    # the remaining items are allocated to the test partition
 
@@ -33,7 +34,7 @@ ECO_PROFILEVAR = 2 # used to specify the size of the profile partition
                    # the larger the value, the smaller the overlap
                    # (with overlap being measured with the Jaccard distance for sets)
 
-# parameters used to specify the user study
+# parameters used to specify the simulated user study
 ECO_PROFILESIZE  = 10
 ECO_NUMOFQUERIES = 10
 ECO_LARGESAMPLE  = 10
@@ -127,39 +128,46 @@ class Agent:
     # updates the agent's average vector
     self.averagevec = np.mean(list(self.profile.values()), 0)
 
+    return None
+
   def query(self, itemID, itemVector, explanation1, explanation2):
 
-    # estimates the agent's surprise caused by exposing it to the recommended item
-    s_hat = self.surprise(itemVector)
+    # obtains the agent's shallow surprise
+    s = self.surprise(itemVector)
 
-    if(s_hat > self.threshold):
+    if(s > self.threshold):
       # if estimated surprise is above the threshold, the agent prefers longer explanations
       option = explanation1 if len(explanation1) > len(explanation2) else explanation2
     else:
       # if estimated surprise is below the threshold, the agent prefers shorter explanations
       option = explanation1 if len(explanation1) < len(explanation2) else explanation2
 
-    return (itemID, option, s_hat)
+    return (itemID, option, s)
 
   def surprise(self, itemVector):
 
-    # estimates the surprise of the recommendation using Kaminskas and Bridge model
+    # DETERMINES the 'shallow' surprise experienced by the agent from being exposed to
+    # a new recommendation.
+    # ** assumes that CTM is a reasonably accurate description of human cognition
+    #    (https://plato.stanford.edu/entries/computational-mind/)
+    # ** assumes that the model of surprise proposed by Kaminskas and Bridge perfectly
+    #    describes how people in general get surprised by events perceived as being
+    #    machine-generated
     #
-    #   Kaminskas, M., & Bridge, D. (2014, October). Measuring surprise in recommender
-    #   systems. In Proceedings of the Workshop on Recommender Systems Evaluation:
-    #   Dimensions and Design (Workshop Programme of the 8th ACM Conference on Recommender
-    #   Systems).
-    #
-    #   -- equation 5 (content-based), equipped with positive-shifted cosine distance
-    s_hat = min([cosdist(itemVector, self.profile[j]) for j in self.profile])
+    #    Kaminskas, M., & Bridge, D. (2014). Measuring surprise in recommender systems
+    #    In Proceedings of the Workshop on Recommender Systems Evaluation: Dimensions and Design
+    #    (Workshop Programme of the 8th ACM Conference on Recommender Systems).
+    #    -- equation 5 (content-based), equipped with positive-shifted cosine distance
+
+    s = min([cosdist(itemVector, self.profile[j]) for j in self.profile])
 
     # adjusts the obtained estimate for agent's sensibility
-    s_hat = self.adjust(s_hat)
+    s = self.adjust(s)
 
-    return s_hat
+    return s
 
-  def adjust(self, s_hat):
-    return round(s_hat, self.sensibility)
+  def adjust(self, s):
+    return round(s, self.sensibility)
 
 class Environment:
   """
@@ -201,8 +209,8 @@ class Environment:
     self.generatePopulation()
 
     # simulates the interaction between the agents and the environment
-    # -- it goes like this analogue:
-    #    1. A participant (an agent) is recruited to participate in our user study
+    # -- it goes like this ANALOGUE:
+    #    1. A participant is recruited to participate in our user study
     #    2. The participant is asked to identify a number of songs she likes (ECO_PROFILESIZE)
     #    3. The participant is presented to an item (the recommendation) and two explanations
     #    4. The participant is asked to answer which explanation fits best the recommendation,
@@ -222,6 +230,7 @@ class Environment:
       print('   Welcome {0: <10}! Thank you so much for taking part in our study! Please sit here ...'.format(agentID))
 
       # 2. The participant is asked to identify a number of songs she likes
+      # [insert code here] Manzato has suggested a scheme to expand this initial selection
       agent.profile = {itemID: self.dataset[itemID] for itemID in sample(self.profilep, ECO_PROFILESIZE)}
       agent.update()
 
@@ -229,8 +238,9 @@ class Environment:
 
         # 3. The participant is presented to an item (the recommendation) and two explanations
 
-        # generates a single recommendation for the current agent
+        # generates a single recommendation for the current agent and estimates its 'shallow' surprise
         itemID = self.recommender.recommend(agent, self.dataset)
+        s_hat  = self.recommender.estimateSurprise(agent, self.dataset[itemID])
 
         # generates two explanations for the last recommendation -- on shorter than the other
         sexp = self.recommender.explain(ECO_SHORTEXP)
@@ -239,31 +249,39 @@ class Environment:
         # randomises the presentation of the explanation on screen
         # -- imagine there are two slots (positions) in the screen where explanations are to be shown
         #    we want to show the short explanation sometimes in position 1, other times in position 2
-        #    we want this to detect (and possibly detect) some common biases in survey responses
+        #    we want this to detect (and possibly avoid) some common biases in responses to surveys
         explanations = [(sexp, ECO_SHORTEXP), (lexp, ECO_LONGEXP)]
         shuffle(explanations)
 
-        #    4. The participant is asked to answer which explanation fits best the recommendation,
-        #       and also to answer a set of questions devised to estimate the experienced surprise
-        #       caused by the recommendation
+        # 4. After being presented to a single recommendation and two explanations, the participant is
+        #    asked to answer which explanation fits best the recommendation, and is also asked to answer
+        #    a set of questions devised to estimate the (shallow) surprise caused by the recommendation
+        # ** assumes that showing a new recommendation does not oblige us to update the agent's profie
+        (itemID, option, s) = agent.query(itemID, self.dataset[itemID], explanations[0], explanations[1])
+        self.results[agentID].append((itemID, s_hat, option, s))
 
-        (itemID, option, s_hat) = agent.query(itemID, self.dataset[itemID], explanations[0], explanations[1])
-        self.results[agentID].append((itemID, option, s_hat))
+    return None
 
   def splitDataset(self):
 
     # creates a list with all itemIDs in the dataset
     itemIDs = list(self.dataset)
+    shuffle(itemIDs)
 
     # allocates some items in the test partition
-    self.testp = sample(itemIDs, int(len(itemIDs) * ECO_SPLIT))
+    #self.testp = sample(itemIDs, int(len(itemIDs) * ECO_SPLIT))
+    splitPosition = int(len(itemIDs) * ECO_SPLIT)
+    self.testp = itemIDs[0: splitPosition]
 
     # allocates the remaining items to the training partition
-    self.trainp = [itemID for itemID in itemIDs if itemID not in self.testp]
+    #self.trainp = [itemID for itemID in itemIDs if itemID not in self.testp]
+    self.trainp = itemIDs[splitPosition:]
 
     # allocates some items to be used in profile building
     # (profiles may contain items that have been allocated to any of the previous partitions)
     self.profilep = sample(itemIDs, int(self.numOfAgents * ECO_PROFILESIZE * ECO_PROFILEVAR))
+
+    return None
 
   def generatePopulation(self):
 
@@ -273,6 +291,8 @@ class Environment:
       agentID = names[i]
       (threshold, sensibility) = choice(self.initialSeeds)
       self.population[agentID] = Agent(agentID, threshold, sensibility)
+
+    return None
 
 class Recommender:
 
@@ -284,6 +304,7 @@ class Recommender:
 
     # properties modified during runtime
     self.lastrec = None
+    self.history = defaultdict(list)
 
     # trains and tests the performance of the recommender
     self.train()
@@ -293,31 +314,50 @@ class Recommender:
 
     # for now, let's suppose our recommender does not require training
     # [insert code here]
-    None
+    return None
 
   def test(self):
 
     # for now, let's suppose our recommender does note require testing
     # [insert code here]
-    None
+    return None
 
   def recommend(self, agent, dataset):
 
     # [insert code here]
-    # this is a very lazy recommender!
-    # what does it do? well, it goes like this:
+    # this is a very lazy recommender! what does it do? well, it goes like this:
     # -- 1. it draws a very large, random sample of items from the dataset
-    #    2. it removes any items that are known to the agent
+    #    2. it removes any items that are known to the agent or have been previously recommended
     #    3. it selects a single item from the sample:
     #       the one whose vector is nearly in the same direction of the average profile vector
 
+    # 1. it draws a very large, random sample of items from the dataset
     largeSample = sample(list(dataset), ECO_LARGESAMPLE)
+
+    # 2. it removes any items that are known to the agent or have been previously recommended
     largeSample = [itemID for itemID in largeSample if itemID not in agent.profile]
+    largeSample = [itemID for itemID in largeSample if itemID not in self.history[agent.name]]#xxx keep this!
+
+    # 3. it selects a single item from the sample
     L1 = [(itemID, cosdist(dataset[itemID], agent.averagevec)) for itemID in largeSample]
     L1.sort(key = lambda e: e[1])
-    self.lastrec = L1[0][0]
+    itemID = L1[0][0]
 
-    return self.lastrec
+    # performs some bookkeeping
+    self.lastrec = (agent.name, itemID)
+    self.history[agent.name].append(itemID)
+
+    return itemID
+
+  def estimateSurprise(self, agent, itemVector):
+
+    # estimates the 'shallow' surprise of an agent, i.e., the surprise assessed before the agent
+    # follows a recommendation, which is presumably different from the surprise assessed after
+    # the agent follows the recommendation, i.e., after actually watching the recommended movie,
+    # or listening to the recommended song, or reading the recommended book, etc.
+    # uses a model proposed by Kaminskas and Bridge in 2014.
+
+    return min([cosdist(itemVector, agent.profile[j]) for j in agent.profile])
 
   def explain(self, option):
 
@@ -361,19 +401,18 @@ class Researcher:
     # prepares the raw results to test the first hypothesis
     self.data4Hypothesis1 = defaultdict(list)
     for agentID in self.rawResults:
-      for (itemID, option, s_hat) in self.rawResults[agentID]:
+      for (itemID, s_hat, option, s) in self.rawResults[agentID]:
         (_, choiceOfExplanation) = option
-        self.data4Hypothesis1[choiceOfExplanation].append(s_hat)
+        self.data4Hypothesis1[choiceOfExplanation].append(s) # uses the agent's informed surprise,
+                                                             # not the one estimated by the recommender
 
-    # computes the confidence interval of surprise for short explanations
-    sample1 = self.data4Hypothesis1[ECO_SHORTEXP]
-    self.CIShort = bs.bootstrap(np.array(sample1), stat_func=bs_stats.sum)
+    # computes the confidence interval of surprise associated to short explanations
+    self.CIShort = bs.bootstrap(np.array(self.data4Hypothesis1[ECO_SHORTEXP]), stat_func=bs_stats.mean)
     print('-- 95% confidence interval of surprise associated to:')
     print('   short explanations is [{0}, {1}], average {2}'.format(self.CIShort.lower_bound, self.CIShort.upper_bound, self.CIShort.value))
 
     # computes the confidence interval of surprise for long explanations
-    sample2 = self.data4Hypothesis1[ECO_LONGEXP]
-    self.CILong = bs.bootstrap(np.array(sample2), stat_func=bs_stats.sum)
+    self.CILong = bs.bootstrap(np.array(self.data4Hypothesis1[ECO_LONGEXP]), stat_func=bs_stats.mean)
     print('   long  explanations is [{0}, {1}], average {2}'.format(self.CILong.lower_bound, self.CILong.upper_bound, self.CILong.value))
 
     # assesses the overlap between the intervals
@@ -384,7 +423,7 @@ class Researcher:
     else:
       print('-- THE INTERVALS DO NOT OVERLAP ** assume that the data support the hypothesis 1')
 
-    return None # xxx include this in all methods, except constructors
+    return None
 
 def main(numOfItems, numOfFeatures, numOfAgents):
 
