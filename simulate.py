@@ -1,26 +1,28 @@
-# for tomorrow: fix xxx; save results as an excel table
-# tone down
 """
 
   simulate: simulates a user study to clarify the relationship between surprise
             and preferred explanation (shorter or longer) in recommender systems
-            using a user model (Agent), and performs a hypothesis test to check
+            using a user model (Agent). It alsoperforms a hypothesis test to check
             if the obtained results support the existence of the relationship
-            (in this very, very idealised experimental conditions)
+            (in these very idealised experimental settings)
 
-  Example: python simulate.py <number of items>, <number of features>, <number of agents>
+  syntax .: python simulate.py <number of items>, <number of features>, <number of agents>
+  example : python 160000 15 5
 
 """
 
+import os
 import sys
 import pickle
 import codecs
 import numpy as np
+import matplotlib.pyplot as plt
 import bootstrapped.bootstrap as bs
 import bootstrapped.stats_functions as bs_stats
 
 from collections import defaultdict
 from random      import seed, sample, choice, shuffle
+from scipy       import stats
 
 # parameters used in generating and handling the mocked dataset
 ECO_SEED  = 23     # seed for the random number generator
@@ -37,7 +39,7 @@ ECO_PROFILEVAR = 2 # used to specify the size of the profile partition
 # parameters used to specify the simulated user study
 ECO_PROFILESIZE  = 10
 ECO_NUMOFQUERIES = 10
-ECO_LARGESAMPLE  = 10
+ECO_LARGESAMPLE  = 1000
 
 # constants used to identify types of explanations
 ECO_SHORTEXP     = 'short'
@@ -77,10 +79,6 @@ def saveAsText(content, filename, _encoding='utf-8'):
   f.close()
 
 #--------------------------------------------------------------------------------------------------
-# Problem-related definitions - Inspection helpers
-#--------------------------------------------------------------------------------------------------
-
-#--------------------------------------------------------------------------------------------------
 # Problem-related definitions
 #--------------------------------------------------------------------------------------------------
 
@@ -89,13 +87,98 @@ def cosdist(v, w):
   # assumes v and w are numpy arrays with similar number of elements
   return (1 - v.dot(w) / (np.linalg.norm(v) * np.linalg.norm(w))) / 2
 
-def generateDataset(numOfItems, numOfFeatures):
-  # generates a mocked dataset containing "numOfItems" items,
-  # each described by "numOfFeatures" features
-  # *** assumes the features represent counting variables
-  # *** assumes the features can be approximately described by normal distributions
-  dataset = {itemID: np.random.normal(ECO_MU, ECO_SD, numOfFeatures) for itemID in range(numOfItems)}
+def dist(v, w):
+  return cosdist(v, w)
+
+def generateDataset(numOfItems, numOfFeatures, numOfAgents = 0):
+
+  if('TESTSIMUL' in os.environ):
+
+    u = np.array([ 1, 0] + [0 for _ in range(numOfFeatures - 2)]) # profile base vector
+    v = np.array([ 0, 1] + [0 for _ in range(numOfFeatures - 2)]) # test  part. base vector
+    w = np.array([-1, 0] + [0 for _ in range(numOfFeatures - 2)]) # train part. base vector
+
+    sizeProfilep = int(numOfAgents * ECO_PROFILESIZE * ECO_PROFILEVAR)
+    sizeTestp    = int(ECO_SPLIT * numOfItems)
+    sizeTrainp   = numOfItems - sizeTestp - sizeProfilep
+
+    L = (
+        [(k + 1, (k + 1) * w) for k in range(sizeTrainp)] +
+        [(k + 1, (k + 1) * v) for k in range(sizeTrainp, sizeTrainp + sizeTestp)] +
+        [(k + 1, (k + 1) * u) for k in range(sizeTrainp + sizeTestp, sizeTrainp + sizeTestp + sizeProfilep)]
+        )
+
+    dataset = {k: vector for (k, vector) in L}
+
+  else:
+    # generates a mocked dataset containing "numOfItems" items,
+    # each described by "numOfFeatures" features
+    # *** assumes the features represent counting variables
+    # *** assumes the features can be approximately described by normal distributions
+    dataset = {itemID: np.random.normal(ECO_MU, ECO_SD, numOfFeatures) for itemID in range(numOfItems)}
+
   return dataset
+
+def plotTwoDists(sample1, sample2, label1, label2, ci1, ci2, plotTitle, xlabel, ylabel, filename):
+
+  # determines some elements of the diagram
+  scale_lb = min(min(sample1), min(sample2))
+  scale_ub = max(max(sample1), max(sample2))
+  scale_grades = 200
+
+  # instead of histograms, induces gaussian models that fit the data
+  method = 'silverman'
+  try:
+    kde1 = stats.gaussian_kde(sample1, method)
+    kde1_pattern = 'k-'
+  except np.linalg.LinAlgError:
+    # if singular matrix, just black out; not a good solution, so ...
+    kde1 = lambda e: [0 for _ in e]
+    kde1_pattern = 'k:'
+
+  try:
+    kde2 = stats.gaussian_kde(sample2, method)
+    kde2_pattern = 'r-'
+  except np.linalg.LinAlgError:
+    kde2 = lambda e: [0 for _ in e]
+    kde2_pattern = 'r:'
+
+  try:
+    whole = np.hstack((sample1, sample2))
+    kde3 = stats.gaussian_kde(whole, method)
+    kde3_pattern = 'b:'
+  except np.linalg.LinAlgError:
+    kde3 = lambda e: [0 for _ in e]
+    kde3_pattern = 'b:'
+
+  # specifies the overall grid structure
+  plt.xkcd()
+  fig   = plt.figure()
+  panel = fig.add_subplot(111)
+  plt.grid(True, color='w', linestyle='solid', linewidth=1)
+  plt.gca().patch.set_facecolor('0.95')
+  plt.title(plotTitle)
+  plt.xlabel(xlabel)
+  plt.ylabel(ylabel)
+
+  # plots the induced distributions
+  x_eval = np.linspace(scale_lb, scale_ub, num=scale_grades)
+  panel.plot(x_eval, kde1(x_eval), kde1_pattern, label=label1)
+  panel.plot(x_eval, kde2(x_eval), kde2_pattern, label=label2)
+  panel.plot(x_eval, kde3(x_eval), kde3_pattern, label='Whole')
+
+  # plots the confidence intervals
+  y = -10
+  y1 = int(y * 0.95)
+  y2 = int(y * 1.05)
+  panel.plot((ci1.lower_bound, ci1.upper_bound), (y1, y1), 'ko-')
+  panel.plot((ci2.lower_bound, ci2.upper_bound), (y2, y2), 'ro-')
+  panel.legend()
+
+  plt.savefig(filename, bbox_inches = 'tight')
+  plt.close(fig)
+
+  return None
 
 #--------------------------------------------------------------------------------------------------
 # Problem-related classes - Agent, Environment, Recommender, and Researcher
@@ -103,9 +186,9 @@ def generateDataset(numOfItems, numOfFeatures):
 class Agent:
   """
   Agent model
-  name (str or int) ..: agent's unique identifier
+  name (str or int) : agent's unique identifier
   threshold (float) : a measure of surprise above which longer explanations will be preferred
-  sensibility (int) : the agent sensibility to variation in surprise, as the number of relevant decimal digits
+  sensibility (int) : the agent sensibility to variation in surprise (relevant decimal digits)
   """
 
   def __init__(self, name, threshold, sensibility):
@@ -132,15 +215,22 @@ class Agent:
 
   def query(self, itemID, itemVector, explanation1, explanation2):
 
-    # obtains the agent's shallow surprise
+    # RECOVERS the agent's shallow surprise
     s = self.surprise(itemVector)
+
+    # parses the explanations into explanation text (which is presented to the agent)
+    # and and explanation type (which is hidden from the agent)
+    (text1, type1) = explanation1
+    (text2, type2) = explanation2
 
     if(s > self.threshold):
       # if estimated surprise is above the threshold, the agent prefers longer explanations
-      option = explanation1 if len(explanation1) > len(explanation2) else explanation2
-    else:
+      option = type1 if len(text1) > len(text2) else type2
+    elif(s < self.threshold):
       # if estimated surprise is below the threshold, the agent prefers shorter explanations
-      option = explanation1 if len(explanation1) < len(explanation2) else explanation2
+      option = type1 if len(text1) < len(text2) else type2
+    else:
+      option = choice([type1, type2])
 
     return (itemID, option, s)
 
@@ -150,18 +240,19 @@ class Agent:
     # a new recommendation.
     # ** assumes that CTM is a reasonably accurate description of human cognition
     #    (https://plato.stanford.edu/entries/computational-mind/)
-    # ** assumes that the model of surprise proposed by Kaminskas and Bridge perfectly
+    # ** assumes that the model of surprise proposed by Kaminskas and Bridge reasonably
     #    describes how people in general get surprised by events perceived as being
     #    machine-generated
-    #
-    #    Kaminskas, M., & Bridge, D. (2014). Measuring surprise in recommender systems
-    #    In Proceedings of the Workshop on Recommender Systems Evaluation: Dimensions and Design
-    #    (Workshop Programme of the 8th ACM Conference on Recommender Systems).
-    #    -- equation 5 (content-based), equipped with positive-shifted cosine distance
+    # ** assumes we have a pretty darn good instrument (questionnaire) to assess surprise
+    #    in this specific recommendation scenario
 
-    s = min([cosdist(itemVector, self.profile[j]) for j in self.profile])
+    # Kaminskas, M., & Bridge, D. (2014). Measuring surprise in recommender systems
+    # In Proceedings of the Workshop on Recommender Systems Evaluation: Dimensions and Design
+    # (Workshop Programme of the 8th ACM Conference on Recommender Systems).
+    # -- equation 5 (content-based), equipped with positive-shifted cosine distance
+    s = min([dist(itemVector, self.profile[j]) for j in self.profile])
 
-    # adjusts the obtained estimate for agent's sensibility
+    # adjusts the obtained value to reflect the agent's sensibility
     s = self.adjust(s)
 
     return s
@@ -174,7 +265,7 @@ class Environment:
   Environment model
   dataset (dict) .....: a dataset with items described by vectors (numpy arrays)
   numOfAgents (int) ..: the number of agents in the environment
-                        (analogous to the number of participants recruited to a user study)
+                        (analogous to the number of participants recruited to the user study)
   initialSeeds (list) : a non-empty list of (threshold, sensibility) tuples, to be used in
                         initialising the population of agents
   """
@@ -199,6 +290,14 @@ class Environment:
     # splits the dataset
     print('-- splitting the dataset into training, test, and profile partitions')
     self.splitDataset()
+    print('   {0:6d} items allocated to the training partition'.format(len(self.trainp)))
+    print('   {0:6d} items allocated to the test     partition'.format(len(self.testp)))
+    print('   {0:6d} items allocated to the profile  partition'.format(len(self.profilep)))
+
+    if('TESTSIMUL' in os.environ):
+      partition = {itemID: self.dataset[itemID] for itemID in self.trainp + self.testp}
+    else:
+      partition = self.dataset
 
     # instantiates the recommender
     print('-- instantiating, training, and testing a recommendation model')
@@ -206,10 +305,10 @@ class Environment:
 
     # generates the population of agents
     print('-- recruiting {0} participants'.format(self.numOfAgents))
-    self.generatePopulation()
+    self.recruitParticipants()
 
     # simulates the interaction between the agents and the environment
-    # -- it goes like this ANALOGUE:
+    # -- it goes like this ANALOGUE (following Narrative 1 in the logbook):
     #    1. A participant is recruited to participate in our user study
     #    2. The participant is asked to identify a number of songs she likes (ECO_PROFILESIZE)
     #    3. The participant is presented to an item (the recommendation) and two explanations
@@ -227,7 +326,7 @@ class Environment:
 
       # 1. A participant (an agent) is recruited to participate in our user study
       agent = self.population[agentID]
-      print('   Welcome {0: <10}! Thank you so much for taking part in our study! Please sit here ...'.format(agentID))
+      print('   Welcome {0: <10} Thank you so much for taking part in our study! Please sit here ...'.format(agentID + '!'))
 
       # 2. The participant is asked to identify a number of songs she likes
       # [insert code here] Manzato has suggested a scheme to expand this initial selection
@@ -239,7 +338,7 @@ class Environment:
         # 3. The participant is presented to an item (the recommendation) and two explanations
 
         # generates a single recommendation for the current agent and estimates its 'shallow' surprise
-        itemID = self.recommender.recommend(agent, self.dataset)
+        itemID = self.recommender.recommend(agent, partition)
         s_hat  = self.recommender.estimateSurprise(agent, self.dataset[itemID])
 
         # generates two explanations for the last recommendation -- on shorter than the other
@@ -256,34 +355,45 @@ class Environment:
         # 4. After being presented to a single recommendation and two explanations, the participant is
         #    asked to answer which explanation fits best the recommendation, and is also asked to answer
         #    a set of questions devised to estimate the (shallow) surprise caused by the recommendation
-        # ** assumes that showing a new recommendation does not oblige us to update the agent's profie
+        # ** assumes that showing a new recommendation does not imply updating the agent's profie
         (itemID, option, s) = agent.query(itemID, self.dataset[itemID], explanations[0], explanations[1])
-        self.results[agentID].append((itemID, s_hat, option, s))
+        self.results[agentID].append((itemID, s_hat, explanations, option, s))
 
     return None
 
   def splitDataset(self):
 
-    # creates a list with all itemIDs in the dataset
-    itemIDs = list(self.dataset)
-    shuffle(itemIDs)
+    if('TESTSIMUL' in os.environ):
 
-    # allocates some items in the test partition
-    #self.testp = sample(itemIDs, int(len(itemIDs) * ECO_SPLIT))
-    splitPosition = int(len(itemIDs) * ECO_SPLIT)
-    self.testp = itemIDs[0: splitPosition]
+      itemIDs = sorted(self.dataset)
+      sizeProfilep  = int(self.numOfAgents * ECO_PROFILESIZE * ECO_PROFILEVAR)
+      sizeTestp     = int(ECO_SPLIT * (len(itemIDs) - sizeProfilep))
+      sizeTrainp    = len(itemIDs) - sizeTestp - sizeProfilep
 
-    # allocates the remaining items to the training partition
-    #self.trainp = [itemID for itemID in itemIDs if itemID not in self.testp]
-    self.trainp = itemIDs[splitPosition:]
+      self.trainp   = itemIDs[0: sizeTrainp]
+      self.testp    = itemIDs[sizeTrainp: sizeTrainp + sizeTestp]
+      self.profilep = itemIDs[sizeTrainp + sizeTestp: sizeTrainp + sizeTestp + sizeProfilep]
 
-    # allocates some items to be used in profile building
-    # (profiles may contain items that have been allocated to any of the previous partitions)
-    self.profilep = sample(itemIDs, int(self.numOfAgents * ECO_PROFILESIZE * ECO_PROFILEVAR))
+    else:
+
+      # creates a list with all itemIDs in the dataset
+      itemIDs = list(self.dataset)
+      shuffle(itemIDs)
+
+      # allocates some items in the test partition
+      splitPosition = int(len(itemIDs) * ECO_SPLIT)
+      self.testp = itemIDs[0: splitPosition]
+
+      # allocates the remaining items to the training partition
+      self.trainp = itemIDs[splitPosition:]
+
+      # allocates some items to be used in profile building
+      # (profiles may contain items that have been allocated to any of the previous partitions)
+      self.profilep = sample(itemIDs, int(self.numOfAgents * ECO_PROFILESIZE * ECO_PROFILEVAR))
 
     return None
 
-  def generatePopulation(self):
+  def recruitParticipants(self):
 
     self.population = {}
     names = ECO_HUMAN_NAMES
@@ -322,24 +432,24 @@ class Recommender:
     # [insert code here]
     return None
 
-  def recommend(self, agent, dataset):
+  def recommend(self, agent, partition):
 
     # [insert code here]
     # this is a very lazy recommender! what does it do? well, it goes like this:
     # -- 1. it draws a very large, random sample of items from the dataset
-    #    2. it removes any items that are known to the agent or have been previously recommended
+    #    2. it removes any items that are known to the agent or have been previously recommended to her
     #    3. it selects a single item from the sample:
     #       the one whose vector is nearly in the same direction of the average profile vector
 
     # 1. it draws a very large, random sample of items from the dataset
-    largeSample = sample(list(dataset), ECO_LARGESAMPLE)
+    largeSample = sample(list(partition), ECO_LARGESAMPLE)
 
-    # 2. it removes any items that are known to the agent or have been previously recommended
+    # 2. it removes any items that are known to the agent or have been previously recommended to her
     largeSample = [itemID for itemID in largeSample if itemID not in agent.profile]
-    largeSample = [itemID for itemID in largeSample if itemID not in self.history[agent.name]]#xxx keep this!
+    largeSample = [itemID for itemID in largeSample if itemID not in self.history[agent.name]]
 
     # 3. it selects a single item from the sample
-    L1 = [(itemID, cosdist(dataset[itemID], agent.averagevec)) for itemID in largeSample]
+    L1 = [(itemID, dist(partition[itemID], agent.averagevec)) for itemID in largeSample]
     L1.sort(key = lambda e: e[1])
     itemID = L1[0][0]
 
@@ -357,7 +467,7 @@ class Recommender:
     # or listening to the recommended song, or reading the recommended book, etc.
     # uses a model proposed by Kaminskas and Bridge in 2014.
 
-    return min([cosdist(itemVector, agent.profile[j]) for j in agent.profile])
+    return min([dist(itemVector, agent.profile[j]) for j in agent.profile])
 
   def explain(self, option):
 
@@ -375,15 +485,43 @@ class Recommender:
 
 class Researcher:
 
-  def __init__(self, rawResults):
+  def __init__(self, results):
 
     # properties defined during instantiation (and unmodified during runtime)
-    self.rawResults = rawResults
+    self.rawResults  = results
 
     # properties related to testing the hypothesis 1
     self.data4Hypothesis1 = None
     self.CIShort = None
     self.CILong  = None
+
+  def tabulateResults(self):
+
+    # organises the raw results into a tabular form
+    # and saves the data in a csv file
+    header  = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'.format('Participant',
+                                                         'Item ID',
+                                                         'Estimated Surprise',
+                                                         'Explanation 1',
+                                                         'Explanation 2',
+                                                         'Reported Surprise',
+                                                         'Preferred Explanation')
+    content = [header]
+
+    for agentID in self.rawResults:
+      for (itemID, s_hat, explanations, option, s) in self.rawResults[agentID]:
+        buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'.format(agentID,
+                                                            itemID,
+                                                            s_hat,
+                                                            explanations[0][1],
+                                                            explanations[1][1],
+                                                            s,
+                                                            option)
+        content.append(buffer)
+
+    saveAsText('\n'.join(content), 'rawResults.csv')
+
+    return None
 
   def overlapCI(self, ci1, ci2):
 
@@ -395,61 +533,91 @@ class Researcher:
   def testHypothesis1(self):
 
     print('Testing the Hypothesis 1')
-    print('-- association of low  estimated surprise and preference for short explanations')
-    print('-- association of high estimated surprise and preference for long  explanations')
+    print('-- association of low  reported surprise and preference for short explanations')
+    print('-- association of high reported surprise and preference for long  explanations')
 
     # prepares the raw results to test the first hypothesis
     self.data4Hypothesis1 = defaultdict(list)
     for agentID in self.rawResults:
-      for (itemID, s_hat, option, s) in self.rawResults[agentID]:
-        (_, choiceOfExplanation) = option
-        self.data4Hypothesis1[choiceOfExplanation].append(s) # uses the agent's informed surprise,
-                                                             # not the one estimated by the recommender
+      for (itemID, s_hat, explanations, option, s) in self.rawResults[agentID]:
+        self.data4Hypothesis1[option].append(s) # uses the agent's reported surprise,
+                                                # not the one estimated by the recommender
 
-    # computes the confidence interval of surprise associated to short explanations
-    self.CIShort = bs.bootstrap(np.array(self.data4Hypothesis1[ECO_SHORTEXP]), stat_func=bs_stats.mean)
-    print('-- 95% confidence interval of surprise associated to:')
-    print('   short explanations is [{0}, {1}], average {2}'.format(self.CIShort.lower_bound, self.CIShort.upper_bound, self.CIShort.value))
+    # estimates the confidence interval of surprise associated to short explanations
+    conclusive = True
+    filename = 'hypothesis1.jpg'
 
-    # computes the confidence interval of surprise for long explanations
-    self.CILong = bs.bootstrap(np.array(self.data4Hypothesis1[ECO_LONGEXP]), stat_func=bs_stats.mean)
-    print('   long  explanations is [{0}, {1}], average {2}'.format(self.CILong.lower_bound, self.CILong.upper_bound, self.CILong.value))
+    print('-- 95% confidence interval of reported surprise associated to:')
+    sample1 = np.array(self.data4Hypothesis1[ECO_SHORTEXP])
+    if(sample1.size >= 10):
+      self.CIShort = bs.bootstrap(sample1, stat_func=bs_stats.mean)
+      print(('   short explanations: [{0}, {1}], average {2}, sample size is {3}').format(self.CIShort.lower_bound, self.CIShort.upper_bound, self.CIShort.value, len(sample1)))
+    else:
+      conclusive = False
+      print('   short explanations: cannot be estimated because the sample has only {0} elements'.format(len(sample1)))
+      print('   -- maybe the surprise threshold has been poorly specified?')
+
+    # estimates the confidence interval of surprise for long explanations
+    sample2 = np.array(self.data4Hypothesis1[ECO_LONGEXP])
+    if(sample2.size >= 10):
+      self.CILong = bs.bootstrap(sample2, stat_func=bs_stats.mean)
+      print('   long  explanations: [{0}, {1}], average {2}, sample size is {3}'.format(self.CILong.lower_bound, self.CILong.upper_bound, self.CILong.value, len(sample2)))
+    else:
+      conclusive = False
+      print('   long  explanations: cannot be estimated because the sample has only {0} elements'.format(len(sample2)))
+      print('   -- maybe the surprise threshold has been poorly specified?')
 
     # assesses the overlap between the intervals
     # ** assumes that if intervals do not overlap, the hypothesis is     supported by the data
     # ** assumes that if intervals do     overlap, the hypothesis is not supported by the data
-    if(self.overlapCI(self.CIShort, self.CILong)):
-      print('-- THE INTERVALS OVERLAP ** assume that the data do not support the hypothesis 1')
+    print()
+    if(conclusive):
+      if(self.overlapCI(self.CIShort, self.CILong)):
+        print('-- THE INTERVALS OVERLAP ** the researcher assumes that the data do not support the hypothesis')
+      else:
+        print('-- THE INTERVALS DO NOT OVERLAP ** the researcher assumes that the data support the hypothesis')
+
+      # plots the distribution of reported surprise conditional on preference for explanation
+      plotTwoDists(sample1, sample2,
+                   'Short', 'Long',
+                   self.CIShort, self.CILong,
+                   'Distribution of reported surprise\nconditional on preferred explanation type',
+                   'Reported surprise',
+                   'Frequency?',
+                   filename)
+
     else:
-      print('-- THE INTERVALS DO NOT OVERLAP ** assume that the data support the hypothesis 1')
+      print('-- THE STUDY WAS INCONCLUSIVE REGARDING THE HYPOTHESIS ** the researcher cries alone in the dark. so sad.')
+      if(os.path.exists(filename)):
+        os.remove(filename)
 
     return None
 
-def main(numOfItems, numOfFeatures, numOfAgents):
+def fiatLux(numOfItems, numOfFeatures, numOfAgents, initialSeeds):
 
   # initialises random number generator
   # (to control variance between repeated essays)
   seed(ECO_SEED)
+  np.random.seed(ECO_SEED)
 
   # [insert code here]
-  # for now, let's use a mocked dataset, but
-  # it must be replaced to load the Spotify dataset
+  # for now, let's use a mocked dataset, but we want to load the Spotify dataset
   print()
-  print('Generating the mocked dataset with {0} items and {1} features.'.format(numOfItems, numOfFeatures))
-  dataset = generateDataset(numOfItems, numOfFeatures)
+  print('Generating the mocked dataset')
+  dataset = generateDataset(numOfItems, numOfFeatures, numOfAgents)
+  print('-- dataset has {0} items with {1} features.'.format(numOfItems, numOfFeatures))
 
   print('Instantiating the simulation environment.')
-  initialSeeds = [(0.05, 8)] # a list with a single tuple means that all agents will be instantiated
-                            # with the same parameters for threshold and sensibility
   environment  = Environment(dataset, numOfAgents, initialSeeds)
 
   print()
-  print('Running the simulation of the user study with {0} participants.'.format(numOfAgents))
+  print('Running the simulation of our user study with {0} participants.'.format(numOfAgents))
   environment.run()
 
   print()
   print('Analysing the results')
   researcher = Researcher(environment.results)
+  researcher.tabulateResults()
   researcher.testHypothesis1()
 
   # saves the environment object for manual inspection
@@ -464,7 +632,20 @@ if __name__ == "__main__":
   numOfFeatures = int(sys.argv[2])
   numOfAgents   = int(sys.argv[3])
 
-  # checks if the parameters will lead to a successful simulation
-  # [insert code here]
+  # a list with (threshold, sensibility) values
+  # a list with a single tuple means that
+  # all agents will be instantiated with the same parameters
+  initialSeeds = [(0.02, 2)]
 
-  main(numOfItems, numOfFeatures, numOfAgents)
+  # [insert code here]
+  # we may want to check if the parameters will lead to
+  # a successful simulation
+
+  # this is used to test the code in more controlled conditions
+  if('TESTSIMUL' in os.environ):
+    print()
+    print('--------------------------------- SIMULATION RUNNING IN TEST MODE ---------------------------------')
+    dist = cosdist
+    initialSeeds = [(0.5, 1)]
+
+  fiatLux(numOfItems, numOfFeatures, numOfAgents, initialSeeds)
