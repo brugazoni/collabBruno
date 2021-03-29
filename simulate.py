@@ -186,7 +186,7 @@ def plotTwoDists(sample1, sample2, label1, label2, ci1, ci2, plotTitle, xlabel, 
 class Agent:
   """
   Agent model
-  name (str or int) : agent's unique identifier
+  name (str or int) : agent's unique identifier (analogue to a participant in the study)
   threshold (float) : a measure of surprise above which longer explanations will be preferred
   sensibility (int) : the agent sensibility to variation in surprise (relevant decimal digits)
   """
@@ -230,6 +230,7 @@ class Agent:
       # if estimated surprise is below the threshold, the agent prefers shorter explanations
       option = type1 if len(text1) < len(text2) else type2
     else:
+      # if estimated surprise is equal to the threshold, then anything goes
       option = choice([type1, type2])
 
     return (itemID, option, s)
@@ -258,14 +259,17 @@ class Agent:
     return s
 
   def adjust(self, s):
+    # reduces the precision of the agent's feedback
+    # ** assumes that humans have bounded ability to ascribe numerical values to
+    #    experienced events
     return round(s, self.sensibility)
 
 class Environment:
   """
   Environment model
-  dataset (dict) .....: a dataset with items described by vectors (numpy arrays)
+  dataset (dict) .....: a dictionary mapping items to item vectors (numpy arrays)
   numOfAgents (int) ..: the number of agents in the environment
-                        (analogous to the number of participants recruited to the user study)
+                        (analogue to the number of participants recruited to the user study)
   initialSeeds (list) : a non-empty list of (threshold, sensibility) tuples, to be used in
                         initialising the population of agents
   """
@@ -282,6 +286,7 @@ class Environment:
     self.testp        = None  # test     partition (used to test  models)
     self.profilep     = None  # profile  partition (used to build agent's profiles)
     self.population   = None  # the collection of agents in the environment
+    self.researcher   = None  # an analogue to the researcher that will analyse the results
     self.recommender  = None  # an instance of recommendation model
     self.results      = None  # results gathered during the simulation
 
@@ -330,6 +335,8 @@ class Environment:
 
       # 2. The participant is asked to identify a number of songs she likes
       # [insert code here] Manzato has suggested a scheme to expand this initial selection
+      # ** assumes that the agent may hold different representations of items than those
+      #    held by other elements of the environment (such as the recommender system)
       agent.profile = {itemID: self.dataset[itemID] for itemID in sample(self.profilep, ECO_PROFILESIZE)}
       agent.update()
 
@@ -347,17 +354,25 @@ class Environment:
 
         # randomises the presentation of the explanation on screen
         # -- imagine there are two slots (positions) in the screen where explanations are to be shown
-        #    we want to show the short explanation sometimes in position 1, other times in position 2
-        #    we want this to detect (and possibly avoid) some common biases in responses to surveys
+        #    we want to show the short explanation sometimes at position 1, other times at position 2
+        #    this allows us to detect (and possibly avoid) some common biases in responses to surveys
         explanations = [(sexp, ECO_SHORTEXP), (lexp, ECO_LONGEXP)]
         shuffle(explanations)
 
         # 4. After being presented to a single recommendation and two explanations, the participant is
-        #    asked to answer which explanation fits best the recommendation, and is also asked to answer
+        #    asked to answer which explanation fits the recommendation best, and is also asked to answer
         #    a set of questions devised to estimate the (shallow) surprise caused by the recommendation
         # ** assumes that showing a new recommendation does not imply updating the agent's profie
         (itemID, option, s) = agent.query(itemID, self.dataset[itemID], explanations[0], explanations[1])
         self.results[agentID].append((itemID, s_hat, explanations, option, s))
+
+
+    print()
+    print('-- researcher collects and analyses the results')
+    researcher = Researcher()
+    researcher.collectResults(self.results)
+    researcher.tabulateResults()
+    researcher.testHypothesis1()
 
     return None
 
@@ -395,6 +410,9 @@ class Environment:
 
   def recruitParticipants(self):
 
+    # generates the population of agents (analogue to participants)
+    # note that agents are instantiated without a profile
+    # -- this is obtained later, during the study
     self.population = {}
     names = ECO_HUMAN_NAMES
     for i in range(self.numOfAgents):
@@ -422,24 +440,26 @@ class Recommender:
 
   def train(self):
 
-    # for now, let's suppose our recommender does not require training
-    # [insert code here]
+    # for now, our recommender does not require training (it is a kNN-like model)
+    # [insert code here] we may want to change this later
     return None
 
   def test(self):
 
-    # for now, let's suppose our recommender does note require testing
-    # [insert code here]
+    # for now, our recommender does note require testing
+    # [insert code here] we may want to change this later
     return None
 
   def recommend(self, agent, partition):
 
     # [insert code here]
     # this is a very lazy recommender! what does it do? well, it goes like this:
-    # -- 1. it draws a very large, random sample of items from the dataset
-    #    2. it removes any items that are known to the agent or have been previously recommended to her
+    # -- 1. it draws a very large, random sample of items from the dataset (ECO_LARGESAMPLE)
+    #    2. it removes any items that are known to the agent or have been previously
+    #       recommended to her
     #    3. it selects a single item from the sample:
-    #       the one whose vector is nearly in the same direction of the average profile vector
+    #       the one whose vector is nearly in the same direction of the agent's average
+    #       profile vector
 
     # 1. it draws a very large, random sample of items from the dataset
     largeSample = sample(list(partition), ECO_LARGESAMPLE)
@@ -449,9 +469,9 @@ class Recommender:
     largeSample = [itemID for itemID in largeSample if itemID not in self.history[agent.name]]
 
     # 3. it selects a single item from the sample
-    L1 = [(itemID, dist(partition[itemID], agent.averagevec)) for itemID in largeSample]
-    L1.sort(key = lambda e: e[1])
-    itemID = L1[0][0]
+    orderedSample = [(itemID, dist(partition[itemID], agent.averagevec)) for itemID in largeSample]
+    orderedSample.sort(key = lambda e: e[1])
+    itemID = orderedSample[0][0]
 
     # performs some bookkeeping
     self.lastrec = (agent.name, itemID)
@@ -485,19 +505,23 @@ class Recommender:
 
 class Researcher:
 
-  def __init__(self, results):
+  def __init__(self):
 
-    # properties defined during instantiation (and unmodified during runtime)
-    self.rawResults  = results
+    # properties modified during runtime
+    self.rawResults  = None
 
     # properties related to testing the hypothesis 1
     self.data4Hypothesis1 = None
     self.CIShort = None
     self.CILong  = None
 
+  def collectResults(self, rawResults):
+    self.rawResults  = rawResults
+    return None
+
   def tabulateResults(self):
 
-    # organises the raw results into a tabular form
+    # organises the raw results into a tabular form,
     # and saves the data in a csv file
     header  = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'.format('Participant',
                                                          'Item ID',
@@ -532,9 +556,10 @@ class Researcher:
 
   def testHypothesis1(self):
 
+    print()
     print('Testing the Hypothesis 1')
-    print('-- association of low  reported surprise and preference for short explanations')
-    print('-- association of high reported surprise and preference for long  explanations')
+    print('-- association of low  reported surprise with preference for short explanations')
+    print('-- association of high reported surprise with preference for long  explanations')
 
     # prepares the raw results to test the first hypothesis
     self.data4Hypothesis1 = defaultdict(list)
@@ -543,13 +568,13 @@ class Researcher:
         self.data4Hypothesis1[option].append(s) # uses the agent's reported surprise,
                                                 # not the one estimated by the recommender
 
-    # estimates the confidence interval of surprise associated to short explanations
     conclusive = True
     filename = 'hypothesis1.jpg'
 
+    # estimates the confidence interval of surprise associated with short explanations
     print('-- 95% confidence interval of reported surprise associated to:')
     sample1 = np.array(self.data4Hypothesis1[ECO_SHORTEXP])
-    if(sample1.size >= 10):
+    if(sample1.size >= ECO_PROFILESIZE):
       self.CIShort = bs.bootstrap(sample1, stat_func=bs_stats.mean)
       print(('   short explanations: [{0}, {1}], average {2}, sample size is {3}').format(self.CIShort.lower_bound, self.CIShort.upper_bound, self.CIShort.value, len(sample1)))
     else:
@@ -557,9 +582,9 @@ class Researcher:
       print('   short explanations: cannot be estimated because the sample has only {0} elements'.format(len(sample1)))
       print('   -- maybe the surprise threshold has been poorly specified?')
 
-    # estimates the confidence interval of surprise for long explanations
+    # estimates the confidence interval of surprise associated with long explanations
     sample2 = np.array(self.data4Hypothesis1[ECO_LONGEXP])
-    if(sample2.size >= 10):
+    if(sample2.size >= ECO_PROFILESIZE):
       self.CILong = bs.bootstrap(sample2, stat_func=bs_stats.mean)
       print('   long  explanations: [{0}, {1}], average {2}, sample size is {3}'.format(self.CILong.lower_bound, self.CILong.upper_bound, self.CILong.value, len(sample2)))
     else:
@@ -614,17 +639,11 @@ def fiatLux(numOfItems, numOfFeatures, numOfAgents, initialSeeds):
   print('Running the simulation of our user study with {0} participants.'.format(numOfAgents))
   environment.run()
 
-  print()
-  print('Analysing the results')
-  researcher = Researcher(environment.results)
-  researcher.tabulateResults()
-  researcher.testHypothesis1()
-
   # saves the environment object for manual inspection
   serialise((environment), 'environment')
 
   print()
-  print('Done.')
+  print('End of simulation.')
 
 if __name__ == "__main__":
 
@@ -633,15 +652,15 @@ if __name__ == "__main__":
   numOfAgents   = int(sys.argv[3])
 
   # a list with (threshold, sensibility) values
-  # a list with a single tuple means that
-  # all agents will be instantiated with the same parameters
+  # --  list with a single tuple means that
+  #     all agents will be instantiated with the same parameters
   initialSeeds = [(0.02, 2)]
 
   # [insert code here]
   # we may want to check if the parameters will lead to
   # a successful simulation
 
-  # this is used to test the code in more controlled conditions
+  # this is used to test the code in controlled setting
   if('TESTSIMUL' in os.environ):
     print()
     print('--------------------------------- SIMULATION RUNNING IN TEST MODE ---------------------------------')
