@@ -2,9 +2,9 @@
 
   simulate: simulates a user study to clarify the relationship between surprise
             and preferred explanation (shorter or longer) in recommender systems
-            using a user model (Agent). It alsoperforms a hypothesis test to check
+            using a user model (Agent). It also performs a hypothesis test to check
             if the obtained results support the existence of the relationship
-            (in these very idealised experimental settings)
+            (in this very idealised setting)
 
   syntax .: python simulate.py <number of items>, <number of features>, <number of agents>
   example : python 160000 15 5
