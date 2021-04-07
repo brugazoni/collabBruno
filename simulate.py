@@ -125,12 +125,7 @@ def generateDataset(numOfItems, numOfFeatures, numOfAgents=0):
         dataset = {k: vector for (k, vector) in L}
 
     else:
-        # generates a mocked dataset containing "numOfItems" items,
-        # each described by "numOfFeatures" features
-        # *** assumes the features represent counting variables
-        # *** assumes the features can be approximately described by normal distributions
 
-        # -----------#
         # importing kaggle dataset:
 
         spotify_data = pd.read_csv('data.csv')
@@ -141,16 +136,71 @@ def generateDataset(numOfItems, numOfFeatures, numOfAgents=0):
           print("Number of items exceeds 174389, the full dataset size")
           return -1
 
-        # numOfFeatures = 16  # number of numeric features in the dataset (15) plus id
+        # complete numOfFeatures = 16  # number of numeric features in the dataset (15) plus id
 
         clean_data = spotify_data.drop(['artists', 'name', 'release_date'], axis=1)  # dropping irrelevant columns
         clean_data.rename(columns={"id": "itemID"})
 
+        #Columns are:
+        # ['valence', 'year', 'acousticness', 'danceability',
+        # 'duration_ms', 'energy', 'explicit',
+        # 'instrumentalness', 'key', 'liveness', 'loudness',
+        # 'mode', 'popularity', 'speechiness', 'tempo']
+
+        # ---------------#
+
+        # Choice contexts: attributes selected by experimental contexts in order to
+        # analyze surprise values variations accordingly:
+
+        # 1) SOUND CONTEXT: features related to recording process and overall sonic impact
+        # -> acousticness, instrumentalness, liveness, loudness
+
+        #clean_data = clean_data.drop(['valence', 'year', 'danceability', 'duration_ms',
+        #                                'energy', 'explicit', 'key', 'mode', 'popularity',
+        #                                'speechiness', 'tempo'], axis=1)
+
+        # 2) PLAY CONTEXT: features related to listeners choosing songs based on particular moods or music experiences
+        # -> danceability, duration_ms, energy, tempo, valence, loudness
+
+        #clean_data = clean_data.drop(['year', 'acousticness', 'explicit',
+        #                              'key', 'mode', 'popularity', 'speechiness', 'liveness',
+        #                              'instrumentalness'], axis=1)
+
+        #3) RELEASE CONTEXT: features related to a song's release and marketing
+        # -> year, duration_ms, speechiness, popularity, explicit, liveness
+
+        #clean_data = clean_data.drop(['valence', 'acousticness', 'danceability',
+        #                              'energy', 'instrumentalness', 'key', 'loudness',
+        #                              'mode', 'tempo'], axis=1)
+
+        #4) NOTATION CONTEXT: features related to notated music elements
+        # -> key, mode, tempo, instrumentalness, loudness
+
+        #clean_data = clean_data.drop(['valence', 'year', 'acousticness',
+        #                              'danceability', 'duration_ms', 'energy',
+        #                              'explicit', 'liveness', 'popularity', 'speechiness'], axis=1)
+
+        #---------------#
+
         dataset = {}
 
         dataset = clean_data.set_index('id').T.to_dict('list')
-        # -----------#
-        #dataset = {itemID: np.random.normal(ECO_MU, ECO_SD, numOfFeatures) for itemID in range(numOfItems)}
+
+        # deriving a numpy matrix M from the dataset
+        itemIDs = list(dataset)
+        M_ = {itemID: np.array(dataset[itemID]) for itemID in itemIDs}
+        M  = np.array([M_[itemID] for itemID in itemIDs])
+
+        # normalising features to mu = 0, std = 1
+        mu = np.mean(M, 0)
+        sd = np.std(M, 0, ddof=1)
+        M  = (M - mu) / sd
+
+        # feeding the results back to the dataset
+        for i in range(len(itemIDs)):
+          itemID = itemIDs[i]
+          dataset[itemID] = M[i]
+
 
     return dataset
 
@@ -528,7 +578,9 @@ class Recommender:
         # or listening to the recommended song, or reading the recommended book, etc.
         # uses a model proposed by Kaminskas and Bridge in 2014.
 
-        return min([dist(itemVector, agent.profile[j]) for j in agent.profile])
+        sur = min([dist(itemVector, agent.profile[j]) for j in agent.profile])
+        print(f"SUR É {sur}")
+        return sur
 
     def explain(self, option):
 
@@ -547,6 +599,7 @@ class Recommender:
 
 class Researcher:
 
+
     def __init__(self):
 
         # properties modified during runtime
@@ -557,6 +610,16 @@ class Researcher:
         self.CIShort = None
         self.CILong = None
 
+
+    #This function assigns classes to observed surprise intervals so as to create
+    #a new column in the raw.csv containing only 5 distinct surprise values
+    def classReport(self, s):
+        if s <= 0.08: return 1
+        if s <= 0.12: return 2
+        if s <= 0.16: return 3
+        if s <= 0.21: return 4
+        return 5
+
     def collectResults(self, rawResults):
         self.rawResults = rawResults
         return None
@@ -565,24 +628,30 @@ class Researcher:
 
         # organises the raw results into a tabular form,
         # and saves the data in a csv file
-        header = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'.format('Participant',
+        header = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}'.format('Participant',
                                                             'Item ID',
                                                             'Estimated Surprise',
                                                             'Explanation 1',
                                                             'Explanation 2',
                                                             'Reported Surprise',
-                                                            'Preferred Explanation')
+                                                            'Preferred Explanation',
+                                                            'Class')
         content = [header]
 
         for agentID in self.rawResults:
             for (itemID, s_hat, explanations, option, s) in self.rawResults[agentID]:
-                buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'.format(agentID,
+
+                #classn is the numbered surprise class assigned by our classification
+                classn = self.classReport(s)
+
+                buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}'.format(agentID,
                                                                     itemID,
                                                                     s_hat,
                                                                     explanations[0][1],
                                                                     explanations[1][1],
                                                                     s,
-                                                                    option)
+                                                                    option,
+                                                                    classn)
                 content.append(buffer)
 
         saveAsText('\n'.join(content), 'rawResults.csv')
@@ -704,10 +773,26 @@ if __name__ == "__main__":
     numOfFeatures = int(sys.argv[2])
     numOfAgents = int(sys.argv[3])
 
+    print("OI")
+
     # a list with (threshold, sensibility) values
     # --  list with a single tuple means that
     #     all agents will be instantiated with the same parameters
-    initialSeeds = [(0.000000000002, 10)]
+    #initialSeeds = [(threshold, sensibility)]
+
+    #COMMENTS ABOUT VALUES FOR THRESHOLD AND SENSIBILITY
+    # Sensibility = amount of digits in surprise values
+    # Threshold = upper limit that is considered as surprise
+    # We may observe that using the kaggle dataset, surprise values tend to fall between
+    # 8 and 10 digits after zero.
+
+    #succesful values before normalization:
+    # [(0.00000005, 9)]
+    # [(0.00000003, 9)]
+    # [(0.00000005, 8)]
+    # [(0.00000003, 8)]
+
+    initialSeeds = [(0.2, 2)]
 
     # [insert code here]
     # we may want to check if the parameters will lead to
@@ -718,6 +803,6 @@ if __name__ == "__main__":
         print()
         print('--------------------------------- SIMULATION RUNNING IN TEST MODE ---------------------------------')
         dist = cosdist
-        initialSeeds = [(0.5, 1)]
+        #initialSeeds = [(0.00000003, 8)]
 
     fiatLux(numOfItems, numOfFeatures, numOfAgents, initialSeeds)
