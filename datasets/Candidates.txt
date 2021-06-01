@@ -1,0 +1,30 @@
+Promising candidates:
+
+(1) MusicBrainz
+https://musicbr ainz.org/doc/MusicBrainz_Database
+Supplementary data includes: user submitted annotations, tags and ratings {CHECK: of music?}
+
+(2) LastFM/HetRec {CHECK: can we identify Brazilian users?}
+https://files.grouplens.org/datasets/hetrec2011/hetrec2011-lastfm-readme.txt
+ 92834 user-listened artist relations, i.e. tuples [user, artist, listeningCount]
+         avg. 49.067 artists most listened by each user
+         avg. 5.265 users who listened each artist
+
+(3) LFM-1b - LastFM 1Billion Songs
+http://www.cp.jku.at/datasets/LFM-1b/
+seek for "LFM music" in dataresearch.research.google.com
+
+
+Rejected candidates:
+
+(1) Amazon Reviews - só tem rating de revisão
+https://s3.amazonaws.com/amazon-reviews-pds/tsv/index.txt
+https://s3.amazonaws.com/amazon-reviews-pds/tsv/amazon_reviews_us_Music_v1_00.tsv.gz
+
+(2) Million Song
+http://millionsongdataset.com/
+
+
+Other datasets:
+
+https://cseweb.ucsd.edu/~jmcauley/datasets.html

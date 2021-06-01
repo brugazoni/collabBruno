@@ -1,0 +1,7 @@
+File	Source	Link
+tracks.csv	Spotify Dataset 1922-2021, ~600k tracks	https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks
+data.csv	Spotify's Worldwide Daily Song Ranking	https://www.kaggle.com/edumucelli/spotifys-worldwide-daily-song-ranking
+
+https://www.kaggle.com/edumucelli/spotifys-worldwide-daily-song-ranking
+The dataset is contained in only one file. Each row contains a ranking position on a specific day for a song.
+For instance, the first 200 rows present the ranking for the 1st of January in Argentina. The following 200 rows will contain the ranking for the 2nd of January in Argentina. The regions are alphabetically sorted.
