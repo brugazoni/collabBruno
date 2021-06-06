@@ -1,24 +1,31 @@
+import re
 import os
 import pickle
 import codecs
 import numpy as np
 import scipy as sp
+import matplotlib.pyplot as plt
+import bootstrapped.bootstrap as bs
+import bootstrapped.stats_functions as bs_stats
 
-from copy         import copy
-from random       import seed, random
-from pandas       import read_csv
-from datetime     import datetime, timedelta
-from itertools    import chain
-from collections  import OrderedDict, defaultdict
-from configparser import RawConfigParser
-from urllib.parse import urlparse
+from copy          import copy
+from scipy         import stats
+from random        import seed, random, sample
+from pandas        import read_csv
+from datetime      import datetime, timedelta
+from itertools     import chain
+from collections   import OrderedDict, defaultdict
+from configparser  import RawConfigParser
+from urllib.parse  import urlparse
+from scipy.spatial import ConvexHull, Delaunay, convex_hull_plot_2d
+
+from sklearn.decomposition import PCA
 
 ECO_SEED = 23
 ECO_PRECISION = 1E-9
 ECO_DATETIME_FMT = '%Y%m%d%H%M%S' # used in logging
 ECO_RAWDATEFMT   = '%Y-%m-%d'     # used in file/memory operations
 ECO_FIELDSEP     = ','
-
 
 #-----------------------------------------------------------------------------------------------------------
 # General purpose definitions - I/O helper functions
@@ -94,6 +101,11 @@ def getMountedOn():
   else:
     res = os.getcwd().split(os.sep)[-0] + os.sep
 
+  return res
+
+def headerfy(mask):
+  res = re.sub('\:\d+\.\d+f', '', mask)
+  res = re.sub('\:\d+d', '', res)
   return res
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
@@ -305,7 +317,7 @@ def listEssayConfig():
   return res
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
-# Problem specific definitions - preprocessing surveillance data
+# Problem specific definitions - preprocessing Spotify datasets
 #-------------------------------------------------------------------------------------------------------------------------------------------
 
 def loadAudioFeatures(sourcepath, featureFile, featurefields):
@@ -605,4 +617,173 @@ def report(urlID, songs, url2id, id2name):
   content.append('-- [features] song artist : {0}'.format(artists))
 
   return '\n'.join(content)
+
+#-----------------------------------------------------------------------------------------------------------
+# General purpose definitions - convex hull in high dimensional spaces
+#-----------------------------------------------------------------------------------------------------------
+
+def distance(v, w):
+  return np.linalg.norm(v - w)
+
+def in_hull(Q, hull):
+  if not isinstance(hull, Delaunay):
+    vertices = [hull.points[i] for i in hull.vertices]
+    hull = Delaunay(vertices)
+  res = hull.find_simplex(Q)>=0
+  summary = {'interior': sum([1 for e in res if e]), 'exterior': sum([1 for e in res if not e])}
+  return res, summary
+
+def estimateDistanceDistrib(Q, hull, interior, samplingProb = 1.0):
+
+  (sample_int, sample_ext) = ([], [])
+  for (isInterior, v) in zip(interior, Q):
+    if(np.random.rand() <= samplingProb):
+      val = max([distance(v, hull.points[i]) for i in hull.vertices])
+      (sample_int if isInterior else sample_ext).append(val)
+
+  ss_int = len(sample_int)
+  ss_ext = len(sample_ext)
+  ci_int = bs.bootstrap(np.array(sample_int), stat_func=bs_stats.mean)
+  ci_ext = bs.bootstrap(np.array(sample_ext), stat_func=bs_stats.mean)
+  tsprint('-- mu internal distribution: {0} (out of {1} samples)'.format(ci_int.value, ss_int))
+  tsprint('               95% interval: [{0}, {1}]'.format(ci_int.lower_bound, ci_int.upper_bound))
+  tsprint('-- mu external distribution: {0} (out of {1} samples)'.format(ci_ext.value, ss_ext))
+  tsprint('               95% interval: [{0}, {1}]'.format(ci_ext.lower_bound, ci_ext.upper_bound))
+
+  stats = {'int.sample': sample_int, 'int.ci': ci_int,
+           'ext.sample': sample_ext, 'ext.ci': ci_ext}
+
+  return stats
+
+def plotHull(hull, Q_, interior, distStats, filename):
+
+  # unpacks parameters
+  (unitsizew, unitsizeh) = (1.940, 1.916)
+  (nrows, ncols) = (5, 6)
+  nd = Q_.shape[1]
+
+  fig = plt.figure(figsize=(ncols * unitsizew, nrows * unitsizeh))
+  gs = fig.add_gridspec(nrows, ncols)
+  plt.xkcd()
+
+  panel1 = fig.add_subplot(gs[0:3, :])
+  panel1.set_title('Item space')
+  panel1.autoscale()
+  panel1.axis('off')
+
+  panel2 = fig.add_subplot(gs[3:, :])
+  panel2.set_title('Surprise distribution conditioned on popularity')
+  panel2.set_xlabel('Upper bound surprise')
+  panel2.set_ylabel('Frequency')
+
+  # ensures items are mapped to 2D points
+  if(nd == 2):
+    V = hull.points
+    Q = Q_
+  else:
+    pca = PCA(n_components=2)
+    V = pca.fit_transform(hull.points)
+    Q = pca.transform(Q_)
+
+  # plots the popular items and the hull #xxx 3D?
+  panel1.plot(V[:,0], V[:,1], 'bo')
+  if(nd == 2):
+    for simplex in hull.simplices:
+      panel1.plot(V[simplex, 0], V[simplex, 1], 'b:')
+
+  # plots the points in Q
+  #for (isInterior, v) in zip(interior, Q):
+  #  panel1.plot(v[0], v[1], 'b+' if isInterior else 'r+')
+
+  for (isInterior, v) in zip(interior, Q):
+    if(not isInterior):
+      panel1.plot(v[0], v[1], 'r+')
+
+  for (isInterior, v) in zip(interior, Q):
+    if(isInterior):
+      panel1.plot(v[0], v[1], 'b+')
+
+  # plots distance distributions
+  # instead of histograms, induces distributions based on gaussian kernels fitted to samples
+  sample_int = distStats['int.sample']
+  sample_ext = distStats['ext.sample']
+  method = 'silverman'
+
+  try:
+    kde1 = stats.gaussian_kde(sample_int, method)
+    kde1_pattern = 'b-'
+  except np.linalg.LinAlgError:
+    # if singular matrix, just black out; not a good solution, so ...
+    kde1 = lambda e: [0 for _ in e]
+    kde1_pattern = 'b:'
+
+  try:
+    kde2 = stats.gaussian_kde(sample_ext, method)
+    kde2_pattern = 'r-'
+  except np.linalg.LinAlgError:
+    kde2 = lambda e: [0 for _ in e]
+    kde2_pattern = 'r:'
+
+  x_lb = min(sample_int + sample_ext)
+  x_ub = max(sample_int + sample_ext)
+  x_grades = 200
+  x_eval = np.linspace(x_lb, x_ub, num=x_grades)
+  y_int = kde1(x_eval)
+  y_ext = kde2(x_eval)
+  y_max = max(y_int + y_ext)
+  panel2.plot(x_eval, y_int, kde1_pattern, label='Popular items')
+  panel2.plot(x_eval, y_ext, kde2_pattern, label='Regular items')
+
+  mu_int = distStats['int.ci'].value
+  mu_ext = distStats['ext.ci'].value
+  panel2.axvline(mu_int, 0.0, y_max, color='b', linestyle=':')
+  panel2.axvline(mu_ext, 0.0, y_max, color='r', linestyle=':')
+
+  panel2.fill_betweenx((0, y_max), distStats['int.ci'].lower_bound,
+                                   distStats['int.ci'].upper_bound, alpha=.13, color='g')
+
+  panel2.fill_betweenx((0, y_max), distStats['ext.ci'].lower_bound,
+                                   distStats['ext.ci'].upper_bound, alpha=.13, color='g')
+
+  panel2.legend()
+
+  plt.savefig(filename, bbox_inches = 'tight')
+  plt.close(fig)
+
+  return None
+
+def buildDataset(url2id, features, samplingProbs, n_components = 2):
+
+  # obtains the sizes of the P and Q partitions
+  allPopIDs  = list(url2id.values())
+  allItemIDs = list(set(features).difference(allPopIDs))
+
+  # obtains the sizes of the P and Q samples
+  (sp_P, sp_Q) = samplingProbs
+  popIDs  = sample(allPopIDs,  int(len(allPopIDs)  * sp_P))
+  itemIDs = sample(allItemIDs, int(len(allItemIDs) * sp_Q))
+
+  # obtains a high-dimensional version of the dataset
+  P_ = np.vstack([features[itemID] for itemID in popIDs])  # set P of popular items
+  Q_ = np.vstack([features[itemID] for itemID in itemIDs]) # set Q (complement of P)
+
+  # ensures items are mapped to 2D points
+  nd = P_.shape[1]
+  if(n_components == 0):
+    n_components = nd
+  if(nd == n_components):
+    P = P_
+    Q = Q_
+    tsprint('-- items represented as {0}-dimensional vectors'.format(nd))
+  else:
+    pca = PCA(n_components=n_components)
+    Q = pca.fit_transform(Q_) 
+    P = pca.transform(P_)
+    ev = pca.explained_variance_ratio_
+    tsprint('-- number of dimensions reduced from {0} to {1}'.format(nd, n_components))
+    tsprint('-- explained variance is {0:5.3f} ({1})'.format(sum(ev), ev))
+
+  samples = (allPopIDs, allItemIDs, popIDs, itemIDs)
+
+  return (P, Q, samples)
 

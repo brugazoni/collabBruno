@@ -1,2 +1,8 @@
-# collabBruno
-Investigating the association of surprise with preference for types of explanation in RS (in collaboration with Bruno and Manzato)
+# surprisesims
+Simulational studies to investigate the association of surprise with other behavioural responses  in recommender systems.
+
+| Prototype<br>Script | Description |
+| -----------  | ----------- |
+| `P01`<br>`simulate.py`<br>(in collaboration with Bruno Gazoni and Marcelo Manzato)| Simulation of a user study to investigate the association between surprise and  preference for explanation size. The hypothesis is that a low/high level of reported surprise is associated with a preference for short/long explanation, respectively. In a sense, this simulation is a numerical study of the conditions under which a conclusive answer to the hypothesis would be obtained, considering the notions of threshold and sensitivity, which are idealised constructs. The first corresponds to a degree of surprise above which longer explanations are (systematically) preferred. The second refers to the minimal change in surprise that participants can (systematically) perceive. The simulation goes like this: <br> 1. A participant is recruited to take part in the study; <br> 2. The participant is asked to identify a number of songs she likes; <br> 3. The participant is presented to an item (the recommendation) and two explanations; <br> 4. The participant is asked to select the explanation that best fits the recommendation, and also to answer a set of questions devised to measure the (shallow, self-reported) surprise; <br> 5. Steps 3 and 4 are repeated a number of times.<br> In addition, the simulation explores different settings regarding the number of participants, the number of items in the repository, the number of item features, and the number of task repeats. Uses the [Spotify Track Features](https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks) dataset.|
+| `P02`<br>`simulate.py`  | ----------- |
+
