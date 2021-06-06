@@ -45,9 +45,9 @@ def main():
   param_sourcepath     = [getMountedOn(), 'Task Stage', 'Task - collabBruno', 'collabBruno', 'datasets', 'spotify']
   param_targetpath     = [getMountedOn(), 'Task Stage', 'Task - collabBruno', 'collabBruno', 'results',  'spotify']
   param_feature_file   = 'tracks.csv'
-  param_feature_fields = ['acousticness', 'danceability', 'duration_ms', 'energy', 'explicit',
-                          'instrumentalness', 'key', 'liveness', 'loudness', 'mode', 'speechiness', 'tempo',
-                          'popularity', 'valence', 'release_date']
+  param_feature_fields = ['acousticness',     'danceability', 'duration_ms', 'energy',   'explicit',
+                          'instrumentalness', 'key',          'liveness',    'loudness', 'mode',
+                          'speechiness',      'tempo',        'popularity',  'valence',  'release_date']
   #param_feature_fields = ['acousticness', 'danceability', 'duration_ms', 'energy',
   #                        'instrumentalness', 'key', 'loudness', 'mode', 'tempo',
   #                        'popularity', 'valence', 'release_date']
@@ -73,15 +73,15 @@ def main():
   # loads the Spotify's Worldwide Daily Song Ranking dataset (D2)
   # -- only records associated to the target region and period are considered
   tsprint('Loading Spotify Dataset of daily song rankings')
-  tsprint('-- considering streams made by users from {0} to {1} in {2}'.format(param_topn_from, 
+  tsprint('-- considering streams made by users from {0} to {1} in {2}'.format(param_topn_from,
                                                                                param_topn_to,
                                                                                param_topn_region))
-  (rankings, timeline, songs) = loadDailyRankings(param_sourcepath,  
-                                                  param_topn_file, 
+  (rankings, timeline, songs) = loadDailyRankings(param_sourcepath,
+                                                  param_topn_file,
                                                   param_topn_region,
-                                                  param_topn_from, 
+                                                  param_topn_from,
                                                   param_topn_to)
-                                                  
+
   tsprint('-- {0} daily rankings have been loaded.'.format(len(rankings)))
   tsprint('-- {0} highly popular tracks have been identified.'.format(len(songs)))
 
@@ -108,7 +108,7 @@ def main():
 
   saveAsText(dict2text(cases),   join(*param_targetpath, 'cases.csv'))
   saveAsText(dict2text(samples), join(*param_targetpath, 'samples.csv'))
-  
+
   saveLog(join(*param_targetpath, 'preprocess.log'))
 
 if __name__ == "__main__":

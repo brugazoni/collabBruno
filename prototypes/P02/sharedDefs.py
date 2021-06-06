@@ -633,7 +633,7 @@ def in_hull(Q, hull):
   summary = {'interior': sum([1 for e in res if e]), 'exterior': sum([1 for e in res if not e])}
   return res, summary
 
-def estimateDistanceDistrib(Q, hull, interior, samplingProb = 1.0):
+def estimateHullDistribs(Q, hull, interior, samplingProb = 1.0):
 
   (sample_int, sample_ext) = ([], [])
   for (isInterior, v) in zip(interior, Q):
@@ -777,7 +777,7 @@ def buildDataset(url2id, features, samplingProbs, n_components = 2):
     tsprint('-- items represented as {0}-dimensional vectors'.format(nd))
   else:
     pca = PCA(n_components=n_components)
-    Q = pca.fit_transform(Q_) 
+    Q = pca.fit_transform(Q_)
     P = pca.transform(P_)
     ev = pca.explained_variance_ratio_
     tsprint('-- number of dimensions reduced from {0} to {1}'.format(nd, n_components))

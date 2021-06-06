@@ -52,7 +52,7 @@ from random     import seed, sample
 from os.path    import join
 from sharedDefs import ECO_SEED
 from sharedDefs import getMountedOn, deserialise, tsprint, serialise, saveLog, dict2text, saveAsText
-from sharedDefs import in_hull, estimateDistanceDistrib, plotHull, distance, buildDataset
+from sharedDefs import in_hull, estimateHullDistribs, plotHull, distance, buildDataset
 from sharedDefs import headerfy
 
 from scipy.spatial   import ConvexHull
@@ -111,7 +111,7 @@ def main():
   # estimates the distribution of max-distances from items interior/exterior to the hull
   #                                               to items representing hull vertices
   tsprint('Estimating surprise distributions for popular and regular items')
-  stats = estimateDistanceDistrib(Q, hull, interior)
+  stats = estimateHullDistribs(Q, hull, interior)
 
   # presents the results
   tsprint('Plotting the results')
@@ -119,9 +119,9 @@ def main():
 
   # gathers evidence to some supporting premises
 
-  # Evidence 1: 
+  # Evidence 1:
   # -- It seems we have two dense regions regarding popular items. These are induced by the fact that
-  #    one of the features of an item is the binary indicator "explicit", which together with 
+  #    one of the features of an item is the binary indicator "explicit", which together with
   #    "liveness" and "speechiness" seems to split the two regions in the space
   X = np.array([features[itemID] for itemID in allPopIDs])
   kmeans = KMeans(n_clusters=2, random_state=ECO_SEED).fit(X)
