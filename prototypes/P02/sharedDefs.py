@@ -8,16 +8,17 @@ import matplotlib.pyplot as plt
 import bootstrapped.bootstrap as bs
 import bootstrapped.stats_functions as bs_stats
 
-from copy          import copy
-from scipy         import stats
-from random        import seed, random, sample
-from pandas        import read_csv
-from datetime      import datetime, timedelta
-from itertools     import chain
-from collections   import OrderedDict, defaultdict
-from configparser  import RawConfigParser
-from urllib.parse  import urlparse
-from scipy.spatial import ConvexHull, Delaunay, convex_hull_plot_2d
+from copy           import copy
+from scipy          import stats
+from random         import random, sample
+from pandas         import read_csv
+from datetime       import datetime, timedelta
+from itertools      import chain
+from collections    import OrderedDict, defaultdict, namedtuple
+from configparser   import RawConfigParser
+from urllib.parse   import urlparse
+from scipy.spatial  import ConvexHull, Delaunay, convex_hull_plot_2d
+from scipy.optimize import linprog
 
 from sklearn.decomposition import PCA
 
@@ -26,6 +27,8 @@ ECO_PRECISION = 1E-9
 ECO_DATETIME_FMT = '%Y%m%d%H%M%S' # used in logging
 ECO_RAWDATEFMT   = '%Y-%m-%d'     # used in file/memory operations
 ECO_FIELDSEP     = ','
+
+FakeHull = namedtuple('FakeHull', ['points', 'vertices', 'simplices'])
 
 #-----------------------------------------------------------------------------------------------------------
 # General purpose definitions - I/O helper functions
@@ -322,6 +325,18 @@ def listEssayConfig():
 
 def loadAudioFeatures(sourcepath, featureFile, featurefields):
 
+  # source record. encoding: 18. means "field 18, included in the preprocessed data"
+  #                          19- means "field 19, ignored by the process"
+
+  # 0.  1.    2.          3.           4.        5.       6           7.            8.
+  # id, name, popularity, duration_ms, explicit, artists, id_artists, release_date, danceability,
+
+  # 9.      10.  11.       12.   13.          14.           15.               16.       17.
+  # energy, key, loudness, mode, speechiness, acousticness, instrumentalness, liveness, valence,
+
+  # 18.    19-
+  # tempo, time_signature
+
   # defines the field-to-type mapping
   def _cast(val, field):
     if(field == 'release_date'):
@@ -341,10 +356,10 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
   # features[itemID]  -> feature vector, and
   # id2name[itemID]   -> (name, artists)
   # name2id[name]     -> [(artists, itemID), ...]
-  itemIDs  = []
   id2name  = {}
   features = {}
   name2id  = defaultdict(list)
+  itemIDs  = defaultdict(int)
   for _, row in df.iterrows():
     itemID  = _cast(row['id'],      'id')
     name    = _cast(row['name'],    'name')
@@ -352,14 +367,16 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
     id2name[itemID]  = (name, artists)
     features[itemID] = [_cast(row[field], field) for field in featurefields]
     name2id[name].append((artists, itemID))
-    #xxx name2id[name.lower()].append((artists, itemID))
-    itemIDs.append(itemID)
+    itemIDs[itemID] += 1
 
-  name2id = dict(name2id)
-
-  # checks uniqueness of id (sorry, I found a lot of funny mismatches in the dataset)
-  if(len(itemIDs) != len(set(itemIDs))):
+  # checks uniqueness of id (sorry, I found a lot of quality issues in the dataset)
+  duplicates = [itemID for itemID in itemIDs if itemIDs[itemID] > 1]
+  if(len(duplicates) > 0):
+    tsprint('   {0}'.format(duplicates))
+    tsprint('-- {0} duplicated keys found'.format(len(duplicates)))
     raise ValueError
+  name2id = dict(name2id)
+  itemIDs = list(itemIDs)
 
   # applies standardisation to the vector representation
   M  = np.array([features[itemID] for itemID in itemIDs])
@@ -376,13 +393,19 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
 
 def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
 
+  # source record. encoding: 1. means "field 1, included in the preprocessed data"
+  #                          1- means "field 1, ignored by the process"
+
+  # 1.        2.          3.      4.       5.   6.    7.
+  # Position, Track Name, Artist, Streams, URL, Date, Region
+
   # defines the field-to-type mapping
   def _cast(val, field):
     if(field == 'Date'):
       res = datetime.strptime(val, ECO_RAWDATEFMT)
     elif(field == 'URL'):
       res = urlparse(val).path.split('/')[-1]
-    elif(field == 'Position'):
+    elif(field in ['Position', 'Streams']):
       res = int(val)
     else:
       res = str(val)
@@ -396,7 +419,7 @@ def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
   df = read_csv(os.path.join(*sourcepath, rankingFile))
 
   # parses the content to build the the dictionaries
-  # rankings[date] -> [(position, urlID), ...], ordered by increasing position
+  # rankings[date] -> [(urlID, position, streams, region), ...], ordered by increasing position
   # songs[urlID] -> (songName, songArtist)
   rankings = defaultdict(list)
   songs    = defaultdict(list)
@@ -407,14 +430,15 @@ def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
     songArtist = _cast(row['Artist'], 'Artist')
     if(region in regions and date >= date_lb and date <= date_ub):
       urlID    = _cast(row['URL'], 'URL')
-      position = _cast(row['Position'], 'Position') #xxx use streams instead? works as weight
-      rankings[date].append((position, urlID))
+      position = _cast(row['Position'], 'Position')
+      streams  = _cast(row['Streams'],  'Streams')
+      rankings[date].append((urlID, position, streams, region))
       songs[urlID].append((songName, songArtist))
 
   # creates the timeline and sorts the rankings (from most to least popular)
   timeline = sorted(rankings)
   for date in timeline:
-    rankings[date].sort(key = lambda e: e[0]) #xxx position or streams?
+    rankings[date].sort(key = lambda e: e[1])
   rankings = dict(rankings)
 
   # ensures url terminal serves as a key
@@ -422,6 +446,7 @@ def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
     if(len(set(songs[urlID])) == 1):
       songs[urlID] = songs[urlID][0]
     else:
+      # a fatal error is raised in case the uniqueness of the urlID ~ (song,artist) is violated
       print(urlID, songs[urlID])
       raise ValueError
   songs = dict(songs)
@@ -474,8 +499,6 @@ def mapURL2ID(songs, id2name, name2id):
 
   # defines the basic procedure to link urlID and itemID
   # -- both url2id and failures are updated
-  url2id = {}
-
   def _do(scope, songs, name2id, id2name, url2id, getID, hasArtist, params = None, verbose = False):
     failures = []
     for urlID in scope:
@@ -497,38 +520,55 @@ def mapURL2ID(songs, id2name, name2id):
 
     return failures
 
-  # links urlID to itemID when there is perfect match using song names
+  url2id = {}
+
+  # links urlID to itemID when there is a perfect match between song names
   last = 0
-  tsprint('-- first pass')
+  tsprint('-- first pass: matching songs by name and artist, perfect string match')
   scope  = list(songs)
   failures = _do(scope, songs, name2id, id2name, url2id, getIDExact, hasArtistExact)
   tsprint('   contributed {0} links'.format(len(url2id) - last))
   last = len(url2id)
 
   # links urlID to itemID when there is exact name match and relaxed artist match
-  tsprint('-- second pass')
+  tsprint('-- second pass: matching songs by exact name match and relaxed artist match')
   scope = failures
   failures = _do(scope, songs, name2id, id2name, url2id, getIDExact, hasArtistRelaxed)
   tsprint('   contributed {0} links'.format(len(url2id) - last))
   last = len(url2id)
 
   # links urlID to itemID by matching song names in lower case
-  tsprint('-- third pass')
+  tsprint('-- third pass: matching songs by relaxed name match and exact artist match')
   params = {name.lower(): name for name in name2id}
   scope = failures
   failures = _do(scope, songs, name2id, id2name, url2id, getIDLower, hasArtistExact, params)
   tsprint('   contributed {0} links'.format(len(url2id) - last))
   last = len(url2id)
 
-  # links urlID to itemID using relaxed matching for both name and artist (keep at the end, very slow)
-  tsprint('-- fourth pass')
-  pairs = [('ao vivo', ''), ('participação especial', ''), ('(', ''), (')', ''), ('[', ''), (']', ''), (' - ', ''), ('original motion picture', ''), ('official song', ''), ('radio edit', ''), ('soundtrack', ''), ('...', ''), (';', '')]
-  stopWords = ['remix', 'remaster', 'remastered', 'acústica', 'acústico', 'acoustic', 'feat.', 'album', 'version', 'edit', 'editada', 'participação']
-  params = (1.0, pairs, stopWords, {name: set(substitute(name.lower(), pairs).split()).difference(stopWords) for name in name2id})
+  # links urlID to itemID using relaxed matching for both name and artist
+  # (must be kept at the end because it is very expensive/slow)
+  tsprint('-- fourth pass: matching songs by name and artist using VSM search with stop words')
+  pairs = [('ao vivo', ''), ('participação especial', ''), ('(', ''), (')', ''), ('[', ''), (']', ''),
+           (' - ', ''), ('original motion picture', ''), ('official song', ''), ('radio edit', ''),
+           ('soundtrack', ''), ('...', ''), (';', '')]
+  stopWords = ['remix', 'remaster', 'remastered', 'acústica', 'acústico', 'acoustic', 'feat.', 'album',
+               'version', 'edit', 'editada', 'participação']
+  params = (1.0, pairs, stopWords,
+            {name: set(substitute(name.lower(), pairs).split()).difference(stopWords) for name in name2id})
   scope = failures
   failures = _do(scope, songs, name2id, id2name, url2id, getIDRelaxed, hasArtistRelaxed, params, verbose = True)
   tsprint('')
   tsprint('   contributed {0} links'.format(len(url2id) - last))
+  last = len(url2id)
+
+  # links urlID to itemID by matching identifiers
+  tsprint('-- fifth pass: matchind songs by exact identifier match')
+  matchedIDs = set(failures).intersection(list(id2name))
+  for urlID in matchedIDs:
+    url2id[urlID] = urlID
+    failures.remove(urlID)
+    tsprint(report(urlID, songs, url2id, id2name))
+  tsprint('   contributed {0} links'.format(len(matchedIDs)))
   last = len(url2id)
 
   # runs a sanity check on the obtained results (as said elsewhere, I am not trusting the dataset)
@@ -593,6 +633,14 @@ def mapURL2ID(songs, id2name, name2id):
         cases[ECO_MATCH_CLASS_U] += 1
         samples[ECO_MATCH_CLASS_U].append(urlID)
 
+  tsprint('Applying sanity check')
+  for case in sorted(cases):
+    tsprint('{0:3d} items classified as {1}'.format(cases[case], case))
+
+  tsprint('Unlinked items (for manual inspection)')
+  for urlID in failures:
+    tsprint(report(urlID, songs, url2id, id2name))
+
   return (url2id, failures, cases, samples)
 
 def report(urlID, songs, url2id, id2name):
@@ -611,7 +659,7 @@ def report(urlID, songs, url2id, id2name):
   content.append('')
   content.append('-- [rankings] song name ..: {0}'.format(songName))
   content.append('-- [features] song name ..: {0}'.format(name))
-  content.append('-- [rankings] url ID .....: {0}'.format(urlID))
+  content.append('-- [rankings] url  ID ....: {0}'.format(urlID))
   content.append('-- [features] item ID ....: {0}'.format(itemID))
   content.append('-- [rankings] song artist : {0}'.format(songArtist))
   content.append('-- [features] song artist : {0}'.format(artists))
@@ -625,21 +673,72 @@ def report(urlID, songs, url2id, id2name):
 def distance(v, w):
   return np.linalg.norm(v - w)
 
-def in_hull(Q, hull):
-  if not isinstance(hull, Delaunay):
-    vertices = [hull.points[i] for i in hull.vertices]
-    hull = Delaunay(vertices)
-  res = hull.find_simplex(Q)>=0
-  summary = {'interior': sum([1 for e in res if e]), 'exterior': sum([1 for e in res if not e])}
-  return res, summary
+def in_hull(Q, P):
+  """
+  Determines which points in Q are interior to the hull induced from P
+  """
 
-def estimateHullDistribs(Q, hull, interior, samplingProb = 1.0):
+  nd = len(Q[0])
 
+  if(nd < 10):
+    # computes the convex hull of P
+    tsprint('-- computing the convex hull around P')
+    hull = ConvexHull(P)
+    tsprint('-- item density interior to the hull induced from P is {0:8.5f}'.format(len(P)/hull.volume))
+  else:
+    hull = FakeHull(points = P, vertices = list(range(len(P))), simplices=[])
+
+  W = np.array([hull.points[i] for i in hull.vertices])
+
+  if(nd < 8):
+    # employs the triagulation approach
+    tsprint('-- applying triangulation to classify points in Q as interior or exterior')
+    (interior, summary) = in_hull_tri(Q, W)
+  else:
+    # employs the linear programming approach
+    tsprint('-- applying linear programming to classify points in Q as interior or exterior')
+    (interior, summary) = in_hull_lp(Q, W)
+
+  return (interior, summary, hull)
+
+def in_hull_tri(Q, W):
+  tri = Delaunay(W)
+  interior = tri.find_simplex(Q) >= 0
+  summary = {'interior': sum([1 for e in interior if e]), 'exterior': sum([1 for e in interior if not e])}
+  return interior, summary
+
+def in_hull_lp(Q, W):
+
+    #xxx remove nd = len(Q[0])
+    n_vertices = len(W)
+
+    c = np.zeros(n_vertices)
+    A = np.r_[W.T, np.ones((1, n_vertices))]
+
+    interior = []
+    summary = {'interior': 0, 'exterior': 0}
+    for q in Q:
+      b  = np.r_[q, np.ones(1)]
+      try:
+        lp = linprog(c, A_eq=A, b_eq=b)
+        success = lp.success
+      except ValueError:
+        success = False
+
+      interior.append(success)
+      summary['interior' if success else 'exterior'] += 1
+
+    return (interior, summary)
+
+def estimateHullDistribs(hull, Q, interior, popIDs, regIDs, features, featureFields, samplingProb = 1.0):
+
+  # produces data that are rendered by plotHull on 'Panel 2'
+  W = np.array([hull.points[i] for i in hull.vertices])
   (sample_int, sample_ext) = ([], [])
   for (isInterior, v) in zip(interior, Q):
     if(np.random.rand() <= samplingProb):
-      val = max([distance(v, hull.points[i]) for i in hull.vertices])
-      (sample_int if isInterior else sample_ext).append(val)
+      surpriseub = max([distance(v, w) for w in W])
+      (sample_int if isInterior else sample_ext).append(surpriseub)
 
   ss_int = len(sample_int)
   ss_ext = len(sample_ext)
@@ -653,57 +752,155 @@ def estimateHullDistribs(Q, hull, interior, samplingProb = 1.0):
   stats = {'int.sample': sample_int, 'int.ci': ci_int,
            'ext.sample': sample_ext, 'ext.ci': ci_ext}
 
-  return stats
+  # produces data that are rendered by plotHull on 'Panel 3' and 'Panel 4'
+  idx_popularity = featureFields.index('popularity')
+  rawData = {'P': [], 'Q': []}
 
-def plotHull(hull, Q_, interior, distStats, filename):
+  for i in range(len(popIDs)):
+    itemID = popIDs[i]
+    popularity = features[itemID][idx_popularity]
+    v = hull.points[i]
+    position = True
+    surpriseub = max([distance(v, w) for w in W])
+    rawData['P'].append((itemID, position, popularity, surpriseub))
+
+  for i in range(len(regIDs)):
+    itemID = regIDs[i]
+    popularity = features[itemID][idx_popularity]
+    v = Q[i]
+    position = interior[i]
+    surpriseub = max([distance(v, w) for w in W])
+    rawData['Q'].append((itemID, position, popularity, surpriseub))
+
+  return stats, rawData
+
+def plotHull(hull, Q_, interior, distStats, rawData, filename):
 
   # unpacks parameters
   (unitsizew, unitsizeh) = (1.940, 1.916)
-  (nrows, ncols) = (5, 6)
+  (nrows, ncols) = (6, 12)
   nd = Q_.shape[1]
 
+  pop_pttrn_1      = 'c-'
+  pop_pttrn_2      = 'c:'
+  sample_pttrn_1   = 'm-'
+  sample_pttrn_2   = 'm:'
+  interior_pttrn_1 = 'b-'
+  interior_pttrn_2 = 'b:'
+  exterior_pttrn_1 = 'r-'
+  exterior_pttrn_2 = 'r:'
+
   fig = plt.figure(figsize=(ncols * unitsizew, nrows * unitsizeh))
+  innerseps = {'left': 0.06, 'bottom': 0.06, 'right': 0.94, 'top': 0.96, 'wspace': 0.90, 'hspace': 1.10}
+  plt.subplots_adjust(left   = innerseps['left'],
+                      bottom = innerseps['bottom'],
+                      right  = innerseps['right'],
+                      top    = innerseps['top'],
+                      wspace = innerseps['wspace'],
+                      hspace = innerseps['hspace'])
+
   gs = fig.add_gridspec(nrows, ncols)
   plt.xkcd()
 
-  panel1 = fig.add_subplot(gs[0:3, :])
-  panel1.set_title('Item space')
-  panel1.autoscale()
-  panel1.axis('off')
+  panel1 = fig.add_subplot(gs[0:3, 0:6])
+  panel1.set_title('Item space (2D projection from {0}-dimensional data, ev = {1:5.3f})'.format(nd, distStats['explained_variance']))
+  #panel1.autoscale()
+  panel1.set_xlim(-5.0,  8.0)
+  panel1.set_ylim(-5.0, 25.0)
 
-  panel2 = fig.add_subplot(gs[3:, :])
-  panel2.set_title('Surprise distribution conditioned on popularity')
-  panel2.set_xlabel('Upper bound surprise')
+  panel2 = fig.add_subplot(gs[3:, 0:6])
+  panel2.set_title('Distribution of expected upper bound surprise')
+  panel2.set_xlabel('Expected upper bound surprise')
   panel2.set_ylabel('Frequency')
+  panel2.set_xlim(0.0, 12.0)
+  panel2.set_ylim(0.0,  1.8)
 
-  # ensures items are mapped to 2D points
+  panel3 = fig.add_subplot(gs[0:3, 6:])
+  panel3.set_title('Expected upper bound surprise conditioned on popularity')
+  panel3.set_xlabel('Popularity')
+  panel3.set_ylabel('Expected upper bound surprise')
+  panel3.set_xlim(-1.6, 3.6)
+  panel3.set_ylim(3.5, 10.0)
+
+  panel4 = fig.add_subplot(gs[3:, 6:])
+  panel4.set_title('Distribution of popularity')
+  panel4.set_xlabel('Popularity')
+  panel4.set_ylabel('Frequency')
+  panel4.set_yscale('log')
+  panel4.set_xlim(-1.6, 3.6)
+  panel4.set_ylim(   1, 1E3)
+
+  # ensures item vectores are projected to 2D
   if(nd == 2):
-    V = hull.points
     Q = Q_
+    V = hull.points
   else:
-    pca = PCA(n_components=2)
-    V = pca.fit_transform(hull.points)
-    Q = pca.transform(Q_)
+    pca = PCA(n_components=2, svd_solver = 'arpack', random_state = ECO_SEED)
+    Q = pca.fit_transform(Q_)
+    V = pca.transform(hull.points)
 
-  # plots the popular items and the hull #xxx 3D?
-  panel1.plot(V[:,0], V[:,1], 'bo')
-  if(nd == 2):
-    for simplex in hull.simplices:
-      panel1.plot(V[simplex, 0], V[simplex, 1], 'b:')
+  #------------------------------------------------------------------
+  # Panel 1 - Item space
+  #------------------------------------------------------------------
 
-  # plots the points in Q
+  ## plots the popular items and the hull
+  #panel1.plot(V[:,0], V[:,1], pop_pttrn_1.replace('-', 'o'), label='Highly popular')
+  #
+  ## if original data in 2D, plots the boundaries of the hull
+  #if(nd == 2):
+  #  for simplex in hull.simplices:
+  #    panel1.plot(V[simplex, 0], V[simplex, 1], interior_pttrn_2)
+  #
+  ## plots the points in Q
+  #(firstInt, firstExt) = (True, True)
   #for (isInterior, v) in zip(interior, Q):
-  #  panel1.plot(v[0], v[1], 'b+' if isInterior else 'r+')
+  #  if(isInterior):
+  #    if(firstInt):
+  #      panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'), label = 'Popular (interior)')
+  #      firstInt = False
+  #    else:
+  #      panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'))
+  #  else:
+  #    if(firstExt):
+  #      panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'), label = 'Regular (exterior)')
+  #      firstExt = False
+  #    else:
+  #      panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'))
 
+  # plots the points in Q that are exterior to Hull(P)
+  (firstInt, firstExt) = (True, True)
   for (isInterior, v) in zip(interior, Q):
     if(not isInterior):
-      panel1.plot(v[0], v[1], 'r+')
+      if(firstExt):
+        panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'), label = 'Regular (exterior)')
+        firstExt = False
+      else:
+        panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'))
 
+  # plots the highly popular items
+  panel1.plot(V[:,0], V[:,1], pop_pttrn_1.replace('-', 'o'), label='Highly popular')
+
+  # plots the points in Q that are interior to Hull(P)
+  (firstInt, firstExt) = (True, True)
   for (isInterior, v) in zip(interior, Q):
     if(isInterior):
-      panel1.plot(v[0], v[1], 'b+')
+      if(firstInt):
+        panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'), label = 'Popular (interior)')
+        firstInt = False
+      else:
+        panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'))
 
-  # plots distance distributions
+  # if original data in 2D, plots the boundaries of the hull
+  if(nd == 2):
+    for simplex in hull.simplices:
+      panel1.plot(V[simplex, 0], V[simplex, 1], interior_pttrn_2)
+
+  panel1.legend(loc = 'upper right')
+
+  #------------------------------------------------------------------
+  # Panel 2 - Distribution of expected upper bound surprise
+  #------------------------------------------------------------------
+
   # instead of histograms, induces distributions based on gaussian kernels fitted to samples
   sample_int = distStats['int.sample']
   sample_ext = distStats['ext.sample']
@@ -711,18 +908,18 @@ def plotHull(hull, Q_, interior, distStats, filename):
 
   try:
     kde1 = stats.gaussian_kde(sample_int, method)
-    kde1_pattern = 'b-'
+    kde1_pattern = interior_pttrn_1
   except np.linalg.LinAlgError:
     # if singular matrix, just black out; not a good solution, so ...
     kde1 = lambda e: [0 for _ in e]
-    kde1_pattern = 'b:'
+    kde1_pattern = interior_pttrn_2
 
   try:
     kde2 = stats.gaussian_kde(sample_ext, method)
-    kde2_pattern = 'r-'
+    kde2_pattern = exterior_pttrn_1
   except np.linalg.LinAlgError:
     kde2 = lambda e: [0 for _ in e]
-    kde2_pattern = 'r:'
+    kde2_pattern = exterior_pttrn_2
 
   x_lb = min(sample_int + sample_ext)
   x_ub = max(sample_int + sample_ext)
@@ -730,60 +927,145 @@ def plotHull(hull, Q_, interior, distStats, filename):
   x_eval = np.linspace(x_lb, x_ub, num=x_grades)
   y_int = kde1(x_eval)
   y_ext = kde2(x_eval)
-  y_max = max(y_int + y_ext)
-  panel2.plot(x_eval, y_int, kde1_pattern, label='Popular items')
-  panel2.plot(x_eval, y_ext, kde2_pattern, label='Regular items')
+  panel2.plot(x_eval, y_ext, kde2_pattern, label='Regular (exterior)')
+  panel2.plot(x_eval, y_int, kde1_pattern, label='Popular (interior)')
 
   mu_int = distStats['int.ci'].value
   mu_ext = distStats['ext.ci'].value
-  panel2.axvline(mu_int, 0.0, y_max, color='b', linestyle=':')
-  panel2.axvline(mu_ext, 0.0, y_max, color='r', linestyle=':')
+  y_ubi = y_int[[i for i in range(x_grades) if x_eval[i] >= mu_int][0]]
+  y_ube = y_ext[[i for i in range(x_grades) if x_eval[i] >= mu_ext][0]]
 
-  panel2.fill_betweenx((0, y_max), distStats['int.ci'].lower_bound,
+  panel2.fill_betweenx((0, y_ubi), distStats['int.ci'].lower_bound,
                                    distStats['int.ci'].upper_bound, alpha=.13, color='g')
 
-  panel2.fill_betweenx((0, y_max), distStats['ext.ci'].lower_bound,
+  panel2.fill_betweenx((0, y_ube), distStats['ext.ci'].lower_bound,
                                    distStats['ext.ci'].upper_bound, alpha=.13, color='g')
 
-  panel2.legend()
+  panel2.axvline(mu_int, 0.0, y_ubi, color=kde1_pattern[0], linestyle=':')
+  panel2.axvline(mu_ext, 0.0, y_ube, color=kde2_pattern[0], linestyle=':')
+
+  panel2.legend(loc = 'upper right')
+
+  #------------------------------------------------------------------
+  # Panel 3 - Expected upper bound surprise conditioned on popularity
+  #------------------------------------------------------------------
+
+  def _rawData2hist(rawData, onlyPosition = None, aggregation = np.mean):
+    temp = defaultdict(list)
+    for (itemID, position, popularity, surpriseub) in rawData:
+      if(onlyPosition is None or onlyPosition == position):
+        temp[popularity].append(surpriseub)
+    hist = sorted([(popularity, aggregation(temp[popularity])) for popularity in temp], key = lambda e: e[0])
+    (x_vals, y_vals) = zip(*hist)
+    return (x_vals, y_vals)
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'], onlyPosition = False)
+  panel3.plot(x_vals, y_vals, exterior_pttrn_2, label='Regular (exterior)')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'], onlyPosition = True)
+  panel3.plot(x_vals, y_vals, interior_pttrn_2, label='Popular (interior)')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'])
+  panel3.plot(x_vals, y_vals, sample_pttrn_1, label='Whole Sample')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['P'])
+  panel3.plot(x_vals, y_vals, pop_pttrn_2, label='Highly popular')
+
+  panel3.legend(loc = 'upper right')
+
+  #------------------------------------------------------------------
+  # Panel 4 - Distribution of popularity
+  #------------------------------------------------------------------
+  f = lambda e: len(e)
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'], onlyPosition = False, aggregation = f)
+  panel4.plot(x_vals, y_vals, exterior_pttrn_2, label='Regular (exterior)')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'], onlyPosition = True, aggregation = f)
+  panel4.plot(x_vals, y_vals, interior_pttrn_2, label='Popular (interior)')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['Q'], aggregation = f)
+  panel4.plot(x_vals, y_vals, sample_pttrn_1, label='Whole Sample')
+
+  (x_vals, y_vals) = _rawData2hist(rawData['P'], aggregation = f)
+  panel4.plot(x_vals, y_vals, pop_pttrn_2, label='Highly popular')
+
+  panel4.legend(loc = 'upper right')
+
 
   plt.savefig(filename, bbox_inches = 'tight')
   plt.close(fig)
 
   return None
 
-def buildDataset(url2id, features, samplingProbs, n_components = 2):
+def buildDataset(url2id, features, featureFields, samplingProbs, n_components = 2, epsilon = 1.00, minPopularity = 5.00):
 
-  # obtains the sizes of the P and Q partitions
-  allPopIDs  = list(url2id.values())
-  allItemIDs = list(set(features).difference(allPopIDs))
+  # minPopularity :- default value is set to a very very very very high level (>= 5-sigma)
+  # https://www.theguardian.com/science/life-and-physics/2014/sep/15/five-sigma-statistics-bayes-particle-physics
 
-  # obtains the sizes of the P and Q samples
+  # obtains the sizes of the P and Q partitions (of U, the universe set)
+  # -- P is the set of items that are known to be highly popular
+  # -- Q is the complement of P; thus, Q may contain both popular and regular items
+  allPopIDs = sorted(set(url2id.values()))
+  allRegIDs = sorted(set(features).difference(allPopIDs))
+
+  # to smooth the hull induced by P, (1) removes items from P whose relative distance to the nearest 
+  # neighbour is larger than a given constant epsilon, and (2) removes items with popularity lower 
+  # than a minimal value (minPopularity)
+  OM = defaultdict(list)
+  for itemIDrow in allPopIDs:
+    for itemIDcol in allPopIDs:
+      if(itemIDrow != itemIDcol):
+        v = features[itemIDrow]
+        w = features[itemIDcol]
+        OM[itemIDrow].append((itemIDcol, distance(v, w)))
+
+  smallest = []
+  for itemID in OM:
+    OM[itemID] = sorted(OM[itemID], key = lambda e: e[1])
+    smallest.append(OM[itemID][0][1])
+
+  smallest.sort()
+  delta = smallest[int((len(smallest) - 1) * epsilon)]
+
+  _idx_popularity = featureFields.index('popularity')
+  for itemID in OM:
+    if(OM[itemID][0][1] > delta or features[itemID][_idx_popularity] < minPopularity):
+      # moves the item from P to Q
+      allPopIDs.remove(itemID)
+      allRegIDs.append(itemID)
+
+  # samples P and Q according to specifications
   (sp_P, sp_Q) = samplingProbs
-  popIDs  = sample(allPopIDs,  int(len(allPopIDs)  * sp_P))
-  itemIDs = sample(allItemIDs, int(len(allItemIDs) * sp_Q))
+  popIDs = sample(allPopIDs, int(len(allPopIDs) * sp_P))
+  regIDs = sample(allRegIDs, int(len(allRegIDs) * sp_Q))
 
   # obtains a high-dimensional version of the dataset
-  P_ = np.vstack([features[itemID] for itemID in popIDs])  # set P of popular items
-  Q_ = np.vstack([features[itemID] for itemID in itemIDs]) # set Q (complement of P)
+  P_ = np.vstack([features[itemID] for itemID in popIDs]) # sample of highly popular items
+  Q_ = np.vstack([features[itemID] for itemID in regIDs]) # sample of regular items (may be popular or not)
 
-  # ensures items are mapped to 2D points
+  # reduces the dimensionality of the dataset, if required
   nd = P_.shape[1]
   if(n_components == 0):
     n_components = nd
+
   if(nd == n_components):
-    P = P_
-    Q = Q_
+    P  = P_
+    Q  = Q_
+    ev = [1.0]
     tsprint('-- items represented as {0}-dimensional vectors'.format(nd))
-  else:
-    pca = PCA(n_components=n_components)
-    Q = pca.fit_transform(Q_)
-    P = pca.transform(P_)
+  elif(nd > n_components):
+    pca = PCA(n_components = n_components, svd_solver = 'arpack', random_state = ECO_SEED)
+    Q  = pca.fit_transform(Q_) #xxx we may want to explore the opposite order
+    P  = pca.transform(P_)
     ev = pca.explained_variance_ratio_
     tsprint('-- number of dimensions reduced from {0} to {1}'.format(nd, n_components))
     tsprint('-- explained variance is {0:5.3f} ({1})'.format(sum(ev), ev))
+  else:
+    # if nd < n_components (i.e., we want to project to a higher dimensional space),
+    # then the caller made a mistake
+    raise ValueError
 
-  samples = (allPopIDs, allItemIDs, popIDs, itemIDs)
+  samples = (allPopIDs, allRegIDs, popIDs, regIDs)
 
-  return (P, Q, samples)
-
+  return (P, Q, samples, ev)

@@ -1,0 +1,22 @@
+Logboek
+
+[6/10/2021 8:13:43 AM] The idea of extending the notion of popularity to encompass a cronological component comes from the need to acknowledge that 'preference for music' (or musical taste elsewhere) changes in predictable ways as we age (with clear differential effects of gender) [1][2][3][4]; this regularity can be explored in recommendation research.
+
+[1] Bonneville-Roussy, A., Rentfrow, P. J., Xu, M. K., & Potter, J. (2013). Music through the ages: Trends in musical engagement and preferences from adolescence through middle adulthood. Journal of Personality and Social Psychology, 105(4), 703–717. https://doi.org/10.1037/a0033770
+(short newspiece available in https://www.sciencedaily.com/releases/2013/10/131015123654.htm)
+
+[2] HARRISON, J., & RYAN, J. (2010). Musical taste and ageing. Ageing and Society, 30(4), 649-669. doi:10.1017/S0144686X09990778
+(not cited by [1], although researchers are afilliated to the same institution)
+
+[3] Specialised blog posts describing evidence in support of [1] from analysis of data from the Spotify platform:
+		https://www.dailymail.co.uk/sciencetech/article-3086498/In-30s-past-musical-peak-Taste-popular-music-stagnates-33-parent-accelerates-this.html
+		https://skynetandebert.com/2015/04/22/music-was-better-back-then-when-do-we-stop-keeping-up-with-popular-music/
+    https://musicmachinery.com/2014/02/13/age-specific-listening/
+
+[4] Specialised blog posts describing evidence in support of [1] from analysis of data from the Deezer platform:
+		https://www.businessinsider.com/why-we-stop-discovering-new-music-around-age-30-2018-6?r=US&IR=T
+
+
+[5] Well, and now, this:
+		https://www.deezer-blog.com/press/almost-half-of-us-tell-musical-mistruths-global-study-reveals/
+		https://www.frontiersin.org/articles/10.3389/fpsyg.2021.633499/full
