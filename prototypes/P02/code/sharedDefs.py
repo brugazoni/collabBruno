@@ -14,6 +14,7 @@ from random         import random, sample
 from pandas         import read_csv
 from datetime       import datetime, timedelta
 from itertools      import chain
+from matplotlib     import animation
 from collections    import OrderedDict, defaultdict, namedtuple
 from configparser   import RawConfigParser
 from urllib.parse   import urlparse
@@ -148,23 +149,28 @@ def setEssayParameter(param, value):
   so_param = param.upper()
 
   # boolean-valued parameters
-  if(so_param in ['PARAM_MASK_ERRORS']):
+  if(so_param in ['PARAM_SAVEIT']):
 
     so_value = eval(value[0]) if isinstance(value, list) else bool(value)
 
   # integer-valued parameters
-  elif(so_param in ['ESSAY_RUNS', 'PARAM_MAXCORES', 'PARAM_MA_WINDOW']):
+  elif(so_param in ['ESSAY_RUNS', 'PARAM_DIM_ITEMSPACE']):
 
     so_value = eval(value[0])
 
   # floating-point-valued parameters
-  elif(so_param in ['PARAM_new']):
+  elif(so_param in ['PARAM_MINPOPULARITY', 'PARAM_THRESHOLD', 'PARAM_VSM_COMMON']):
 
     so_value = float(eval(value[0]))
 
   # parameters that requires eval expansion
-  elif(so_param in ['PARAM_SOURCEPATH', 'PARAM_TARGETPATH', 'PARAM_TERRITORY', 'PARAM_POPSIZES',
-                    'PARAM_OUTCOMES', 'PARAM_DATAFIELDS']):
+  elif(so_param in ['PARAM_SOURCEPATH',    'PARAM_TARGETPATH',   'PARAM_FEATURE_FIELDS',
+                    'PARAM_TOPN_FIELDS',   'PARAM_TOPN_REGIONS', 'PARAM_IGNORELINKS',
+                    'PARAM_SAMPLINGPROBS', 'PARAM_DIMS',         'PARAM_EPSS',
+                    'PARAM_BROWSER',       'PARAM_VSM_PAIRS',    'PARAM_VSM_STOPWORDS']):
+
+
+
 
     so_value = value
 
@@ -240,17 +246,35 @@ def loadEssayConfig(configFile):
       if('PARAM_TARGETPATH' in EssayParameters):
         EssayParameters['PARAM_TARGETPATH']  = eval(EssayParameters['PARAM_TARGETPATH'][0])
 
-      if('PARAM_DATAFIELDS' in EssayParameters):
-        EssayParameters['PARAM_DATAFIELDS']  = eval(EssayParameters['PARAM_DATAFIELDS'][0])
+      if('PARAM_FEATURE_FIELDS' in EssayParameters):
+        EssayParameters['PARAM_FEATURE_FIELDS']  = eval(EssayParameters['PARAM_FEATURE_FIELDS'][0])
 
-      if('PARAM_TERRITORY' in EssayParameters):
-        EssayParameters['PARAM_TERRITORY']  = eval(EssayParameters['PARAM_TERRITORY'][0])
+      if('PARAM_TOPN_FIELDS' in EssayParameters):
+        EssayParameters['PARAM_TOPN_FIELDS']  = eval(EssayParameters['PARAM_TOPN_FIELDS'][0])
 
-      if('PARAM_POPSIZES' in EssayParameters):
-        EssayParameters['PARAM_POPSIZES']  = eval(EssayParameters['PARAM_POPSIZES'][0])
+      if('PARAM_TOPN_REGIONS' in EssayParameters):
+        EssayParameters['PARAM_TOPN_REGIONS']  = eval(EssayParameters['PARAM_TOPN_REGIONS'][0])
 
-      if('PARAM_OUTCOMES' in EssayParameters):
-        EssayParameters['PARAM_OUTCOMES']  = eval(EssayParameters['PARAM_OUTCOMES'][0])
+      if('PARAM_IGNORELINKS' in EssayParameters):
+        EssayParameters['PARAM_IGNORELINKS']  = eval(EssayParameters['PARAM_IGNORELINKS'][0])
+
+      if('PARAM_SAMPLINGPROBS' in EssayParameters):
+        EssayParameters['PARAM_SAMPLINGPROBS']  = eval(EssayParameters['PARAM_SAMPLINGPROBS'][0])
+
+      if('PARAM_DIMS' in EssayParameters):
+        EssayParameters['PARAM_DIMS']  = eval(EssayParameters['PARAM_DIMS'][0])
+
+      if('PARAM_EPSS' in EssayParameters):
+        EssayParameters['PARAM_EPSS']  = eval(EssayParameters['PARAM_EPSS'][0])
+
+      if('PARAM_BROWSER' in EssayParameters):
+        EssayParameters['PARAM_BROWSER']  = eval(EssayParameters['PARAM_BROWSER'][0])
+
+      if('PARAM_VSM_PAIRS' in EssayParameters):
+        EssayParameters['PARAM_VSM_PAIRS']  = eval(EssayParameters['PARAM_VSM_PAIRS'][0])
+
+      if('PARAM_VSM_STOPWORDS' in EssayParameters):
+        EssayParameters['PARAM_VSM_STOPWORDS']  = eval(EssayParameters['PARAM_VSM_STOPWORDS'][0])
 
       # checks if configuration is ok
       (check, errors) = checkEssayConfig(configFile)
@@ -285,19 +309,6 @@ def checkEssayConfig(configFile):
     check = False
     param_name = 'ESSAY_CONFIGID'
     restriction = 'be part of the config filename'
-    errors.append("Parameter {0} (set as {2}) must respect restriction: {1}\n".format(param_name, restriction, EssayParameters[param_name]))
-
-  if(EssayParameters['PARAM_MA_WINDOW'] < 1):
-    check = False
-    param_name = 'PARAM_MA_WINDOW'
-    restriction = 'be larger than zero'
-    errors.append("Parameter {0} (set as {2}) must respect restriction: {1}\n".format(param_name, restriction, EssayParameters[param_name]))
-
-  opts = ['Peddireddy', 'IB-forward']
-  if(EssayParameters['PARAM_CORE_MODEL'] not in opts):
-    check = False
-    param_name = 'PARAM_CORE_MODEL'
-    restriction = 'be one of {0}'.format(opts)
     errors.append("Parameter {0} (set as {2}) must respect restriction: {1}\n".format(param_name, restriction, EssayParameters[param_name]))
 
   # summarises errors found
@@ -352,10 +363,11 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
   # recovers the content of the features datafile
   df = read_csv(os.path.join(*sourcepath, featureFile))
 
-  # parses the content to build the the dictionaries
+  # parses the content to build these dictionaries:
   # features[itemID]  -> feature vector, and
-  # id2name[itemID]   -> (name, artists)
-  # name2id[name]     -> [(artists, itemID), ...]
+  # id2name[itemID]   -> (name, artists, year)
+  # name2id[name]     -> [(itemID, artists, year), ...]
+
   id2name  = {}
   features = {}
   name2id  = defaultdict(list)
@@ -364,9 +376,10 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
     itemID  = _cast(row['id'],      'id')
     name    = _cast(row['name'],    'name')
     artists = _cast(row['artists'], 'artists')
-    id2name[itemID]  = (name, artists)
+    year    =       row['release_date'][0:4]
+    id2name[itemID]  = (name, artists, year)
+    name2id[name].append((itemID, artists, year))
     features[itemID] = [_cast(row[field], field) for field in featurefields]
-    name2id[name].append((artists, itemID))
     itemIDs[itemID] += 1
 
   # checks uniqueness of id (sorry, I found a lot of quality issues in the dataset)
@@ -390,6 +403,29 @@ def loadAudioFeatures(sourcepath, featureFile, featurefields):
     features[itemID] = M[i]
 
   return (features, id2name, name2id)
+
+def buildReverso(id2name, vsmparams):
+
+  (_, pairs, stopWords) = vsmparams
+  reverso = defaultdict(list)
+  for itemID in id2name:
+
+    (name, artists, year) = id2name[itemID]
+
+    tokens = set(substitute(name.lower(), pairs).split()).difference(stopWords)
+    for token in tokens:
+      reverso[token].append(itemID)
+
+    for artist in artists:
+      tokens = set(substitute(artist.lower(), pairs).split()).difference(stopWords)
+      for token in tokens:
+        reverso[token].append(itemID)
+
+    reverso[year].append(itemID)
+
+  reverso = dict(reverso)
+
+  return reverso
 
 def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
 
@@ -456,9 +492,8 @@ def loadDailyRankings(sourcepath, rankingFile, regions, date_from, date_to):
 def getIDExact(songName, name2id, params = None):
   return name2id[songName]
 
-def getIDLower(songName, name2id, params = None):
-  _name2Name = params
-  return name2id[_name2Name[songName.lower()]]
+def getIDLower(songName, name2id, name2Name = None):
+  return name2id[name2Name[songName.lower()]]
 
 def getIDRelaxed(songName, name2id, params = None):
   (threshold, pairs, stopWords, names) = params
@@ -495,7 +530,7 @@ def substitute(s, pairs):
     s = s.replace(substr, to)
   return s
 
-def mapURL2ID(songs, id2name, name2id):
+def mapURL2ID(songs, id2name, name2id, vsmparams):
 
   # defines the basic procedure to link urlID and itemID
   # -- both url2id and failures are updated
@@ -505,7 +540,7 @@ def mapURL2ID(songs, id2name, name2id):
       (songName, songArtist) = songs[urlID]
       try:
         found = False
-        for (artists, itemID) in getID(songName, name2id, params):
+        for (itemID, artists, year) in getID(songName, name2id, params):
           if(hasArtist(songArtist, artists, params)):
             url2id[urlID] = itemID
             found = True
@@ -548,12 +583,8 @@ def mapURL2ID(songs, id2name, name2id):
   # links urlID to itemID using relaxed matching for both name and artist
   # (must be kept at the end because it is very expensive/slow)
   tsprint('-- fourth pass: matching songs by name and artist using VSM search with stop words')
-  pairs = [('ao vivo', ''), ('participação especial', ''), ('(', ''), (')', ''), ('[', ''), (']', ''),
-           (' - ', ''), ('original motion picture', ''), ('official song', ''), ('radio edit', ''),
-           ('soundtrack', ''), ('...', ''), (';', '')]
-  stopWords = ['remix', 'remaster', 'remastered', 'acústica', 'acústico', 'acoustic', 'feat.', 'album',
-               'version', 'edit', 'editada', 'participação']
-  params = (1.0, pairs, stopWords,
+  (commonality, pairs, stopWords) = vsmparams
+  params = (commonality, pairs, stopWords,
             {name: set(substitute(name.lower(), pairs).split()).difference(stopWords) for name in name2id})
   scope = failures
   failures = _do(scope, songs, name2id, id2name, url2id, getIDRelaxed, hasArtistRelaxed, params, verbose = True)
@@ -562,7 +593,7 @@ def mapURL2ID(songs, id2name, name2id):
   last = len(url2id)
 
   # links urlID to itemID by matching identifiers
-  tsprint('-- fifth pass: matchind songs by exact identifier match')
+  tsprint('-- fifth pass: matchinh songs by exact identifier match')
   matchedIDs = set(failures).intersection(list(id2name))
   for urlID in matchedIDs:
     url2id[urlID] = urlID
@@ -582,7 +613,7 @@ def mapURL2ID(songs, id2name, name2id):
   ECO_MATCH_CLASS_7 = '7. exact name match, relaxed artist match'
   ECO_MATCH_CLASS_8 = '8. relaxed name match, artist in the list'
   ECO_MATCH_CLASS_9 = '9. relaxed name match, relaxed artist match'
-  ECO_MATCH_CLASS_U = 'U. unclassified'
+  ECO_MATCH_CLASS_U = 'U. undetermined'
 
   cases   = defaultdict(int)
   samples = defaultdict(list)
@@ -598,7 +629,7 @@ def mapURL2ID(songs, id2name, name2id):
 
     if(itemID is not None):
 
-      (name, artists) = id2name[itemID]
+      (name, artists, year) = id2name[itemID]
       if(songName == name and songArtist == artists[0] and len(artists) == 1):
         cases[ECO_MATCH_CLASS_1]  += 1
 
@@ -650,7 +681,7 @@ def report(urlID, songs, url2id, id2name):
   try:
     (songName, songArtist) = songs[urlID]
     itemID = url2id[urlID]
-    (name, artists) = id2name[itemID]
+    (name, artists, year) = id2name[itemID]
 
   except:
     None
@@ -709,7 +740,6 @@ def in_hull_tri(Q, W):
 
 def in_hull_lp(Q, W):
 
-    #xxx remove nd = len(Q[0])
     n_vertices = len(W)
 
     c = np.zeros(n_vertices)
@@ -803,8 +833,7 @@ def plotHull(hull, Q_, interior, distStats, rawData, filename):
   plt.xkcd()
 
   panel1 = fig.add_subplot(gs[0:3, 0:6])
-  panel1.set_title('Item space (2D projection from {0}-dimensional data, ev = {1:5.3f})'.format(nd, distStats['explained_variance']))
-  #panel1.autoscale()
+  panel1.set_title('Item space (projection from {0}-dimensional data, ev = {1:5.3f})'.format(nd, distStats['explained_variance']))
   panel1.set_xlim(-5.0,  8.0)
   panel1.set_ylim(-5.0, 25.0)
 
@@ -842,30 +871,6 @@ def plotHull(hull, Q_, interior, distStats, rawData, filename):
   #------------------------------------------------------------------
   # Panel 1 - Item space
   #------------------------------------------------------------------
-
-  ## plots the popular items and the hull
-  #panel1.plot(V[:,0], V[:,1], pop_pttrn_1.replace('-', 'o'), label='Highly popular')
-  #
-  ## if original data in 2D, plots the boundaries of the hull
-  #if(nd == 2):
-  #  for simplex in hull.simplices:
-  #    panel1.plot(V[simplex, 0], V[simplex, 1], interior_pttrn_2)
-  #
-  ## plots the points in Q
-  #(firstInt, firstExt) = (True, True)
-  #for (isInterior, v) in zip(interior, Q):
-  #  if(isInterior):
-  #    if(firstInt):
-  #      panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'), label = 'Popular (interior)')
-  #      firstInt = False
-  #    else:
-  #      panel1.plot(v[0], v[1], interior_pttrn_1.replace('-', '+'))
-  #  else:
-  #    if(firstExt):
-  #      panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'), label = 'Regular (exterior)')
-  #      firstExt = False
-  #    else:
-  #      panel1.plot(v[0], v[1], exterior_pttrn_1.replace('-', '+'))
 
   # plots the points in Q that are exterior to Hull(P)
   (firstInt, firstExt) = (True, True)
@@ -998,7 +1003,98 @@ def plotHull(hull, Q_, interior, distStats, rawData, filename):
 
   return None
 
-def buildDataset(url2id, features, featureFields, samplingProbs, n_components = 2, epsilon = 1.00, minPopularity = 5.00):
+def playHull(hull, Q_, interior, distStats, filename = None, saveit = True):
+
+  # unpacks parameters
+  #(unitsizew, unitsizeh) = (1.940, 1.916)
+  (unitsizew, unitsizeh) = (2.000, 1.916)
+  (nrows, ncols) = (3, 3)
+  nd = Q_.shape[1]
+
+  pop_pttrn_1      = 'c-'
+  pop_pttrn_2      = 'c:'
+  sample_pttrn_1   = 'm-'
+  sample_pttrn_2   = 'm:'
+  interior_pttrn_1 = 'b-'
+  interior_pttrn_2 = 'b:'
+  exterior_pttrn_1 = 'r-'
+  exterior_pttrn_2 = 'r:'
+
+  tsprint('-- projecting data to 3D itemspace')
+  #plt.xkcd()
+  fig = plt.figure(figsize=(ncols * unitsizew, nrows * unitsizeh))
+  panel1 = fig.add_subplot(projection='3d')
+  panel1.set_title('Item space (projection from {0}D data, ev = {1:5.3f})'.format(nd, distStats['explained_variance']))
+  panel1.set_xlim(-5.0,  8.0)
+  panel1.set_ylim(-5.0, 25.0)
+
+  # ensures item vectores are projected to 3D
+  if(nd < 3):
+    return None
+  elif(nd == 3):
+    Q = Q_
+    V = hull.points
+  else:
+    pca = PCA(n_components=3, svd_solver = 'arpack', random_state = ECO_SEED)
+    Q = pca.fit_transform(Q_)
+    V = pca.transform(hull.points)
+
+  #------------------------------------------------------------------
+  # Panel 1 - Item space
+  #------------------------------------------------------------------
+
+  # plots the points in Q that are exterior to Hull(P)
+  tsprint('-- rendering items in 3D itemspace')
+  (firstInt, firstExt) = (True, True)
+  for (isInterior, v) in zip(interior, Q):
+    if(not isInterior):
+      if(firstExt):
+        panel1.plot(v[0], v[1], v[2], exterior_pttrn_1.replace('-', '+'), label = 'Regular (exterior)')
+        firstExt = False
+      else:
+        panel1.plot(v[0], v[1], v[2], exterior_pttrn_1.replace('-', '+'))
+
+  # plots the highly popular items
+  panel1.plot(V[:,0], V[:,1], V[:,2], pop_pttrn_1.replace('-', 'o'), label='Highly popular')
+
+  # plots the points in Q that are interior to Hull(P)
+  (firstInt, firstExt) = (True, True)
+  for (isInterior, v) in zip(interior, Q):
+    if(isInterior):
+      if(firstInt):
+        panel1.plot(v[0], v[1], v[2], interior_pttrn_1.replace('-', '+'), label = 'Popular (interior)')
+        firstInt = False
+      else:
+        panel1.plot(v[0], v[1], v[2], interior_pttrn_1.replace('-', '+'))
+
+  # if original data in 2D, plots the boundaries of the hull
+  if(nd == 3):
+    for simplex in hull.simplices:
+      panel1.plot(V[simplex, 0], V[simplex, 1], V[simplex, 2], interior_pttrn_2)
+
+  if(saveit):
+
+    def rotate_azim(i):
+      if(i < 360):
+        panel1.view_init(elev=10., azim=i)
+      else:
+        panel1.view_init(azim=10., elev=i)
+      print('.', end = '')
+      return fig,
+
+    tsprint('-- rendering and saving the animation')
+    anim = animation.FuncAnimation(fig, rotate_azim, init_func=None,
+                                   frames=720, interval=200, blit=True)
+
+    anim.save(filename, fps=5, extra_args=['-vcodec', 'libx264'])
+
+  else:
+
+    plt.show()
+
+  return None
+
+def buildDataset(url2id, features, featureFields, n_components = 2, epsilon = 1.00, samplingProbs = (1.0, 1.0), minPopularity = 5.00):
 
   # minPopularity :- default value is set to a very very very very high level (>= 5-sigma)
   # https://www.theguardian.com/science/life-and-physics/2014/sep/15/five-sigma-statistics-bayes-particle-physics
@@ -1009,8 +1105,8 @@ def buildDataset(url2id, features, featureFields, samplingProbs, n_components = 
   allPopIDs = sorted(set(url2id.values()))
   allRegIDs = sorted(set(features).difference(allPopIDs))
 
-  # to smooth the hull induced by P, (1) removes items from P whose relative distance to the nearest 
-  # neighbour is larger than a given constant epsilon, and (2) removes items with popularity lower 
+  # to smooth the hull induced by P, (1) removes items from P whose relative distance to the nearest
+  # neighbour is larger than a given constant epsilon, and (2) removes items with popularity lower
   # than a minimal value (minPopularity)
   OM = defaultdict(list)
   for itemIDrow in allPopIDs:
@@ -1056,7 +1152,7 @@ def buildDataset(url2id, features, featureFields, samplingProbs, n_components = 
     tsprint('-- items represented as {0}-dimensional vectors'.format(nd))
   elif(nd > n_components):
     pca = PCA(n_components = n_components, svd_solver = 'arpack', random_state = ECO_SEED)
-    Q  = pca.fit_transform(Q_) #xxx we may want to explore the opposite order
+    Q  = pca.fit_transform(Q_)
     P  = pca.transform(P_)
     ev = pca.explained_variance_ratio_
     tsprint('-- number of dimensions reduced from {0} to {1}'.format(nd, n_components))

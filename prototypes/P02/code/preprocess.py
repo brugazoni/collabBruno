@@ -1,6 +1,9 @@
 """
   `preproces.py`
-  
+
+  syntax .: python preproces.py <config file>
+  example : python preproces.py ../configs/general_T01_C0.cfg
+
   Loads two datasets collected from the Spotify platform and try to link their records
   This script reads and preprocesses these two datasets:
   (D1) Spotify's Audio Features dataset, ~600k tracks from 1922-2021 (tracks.csv)
@@ -38,22 +41,46 @@ from datetime   import datetime
 from sharedDefs import ECO_SEED
 from sharedDefs import setupEssayConfig, getEssayParameter, setEssayParameter, overrideEssayParameter
 from sharedDefs import getMountedOn, serialise, saveAsText, stimestamp, tsprint, saveLog, dict2text
-from sharedDefs import loadAudioFeatures, loadDailyRankings, mapURL2ID
+from sharedDefs import loadAudioFeatures, loadDailyRankings, mapURL2ID, buildReverso
 
-def main():
+def main(configFile):
 
-  # determines the simulation parameters
-  param_sourcepath     = [getMountedOn(), 'Task Stage', 'Task - collabBruno', 'collabBruno', 'datasets', 'spotify']
-  param_targetpath     = [getMountedOn(), 'Task Stage', 'Task - collabBruno', 'collabBruno', 'results',  'spotify']
-  param_feature_file   = 'tracks.csv'
-  param_feature_fields = ['acousticness',     'danceability', 'duration_ms', 'energy',   'tempo',
-                          'instrumentalness', 'release_date', 'liveness',    'loudness', 'mode',
-                          'speechiness',      'explicit',     'popularity',  'valence',  'key']
-  param_topn_file      = 'data.csv'
-  param_topn_fields    = ['Region', 'Date', 'URL', 'Track Name', 'Artist', 'Position', 'Streams']
-  param_topn_region    = ['br']
-  param_topn_from      = '1922-01-01'
-  param_topn_to        = '2021-12-31'
+  ud.LogBuffer = []
+
+  # parses the config file
+  tsprint('Running essay with specs recovered from [{0}]\n'.format(configFile))
+  if(not isfile(configFile)):
+    print('Command line parameter is not a file: {0}'.format(configFile))
+    exit(1)
+  tsprint('Processing essay configuration file [{0}]\n{1}'.format(configFile, setupEssayConfig(configFile)))
+
+  # recovers attributes that identify the essay
+  essayid  = getEssayParameter('ESSAY_ESSAYID')
+  configid = getEssayParameter('ESSAY_CONFIGID')
+  scenario = getEssayParameter('ESSAY_SCENARIO')
+  replicas = getEssayParameter('ESSAY_RUNS')
+
+  # recovers parameters related to the problem instance
+  param_sourcepath     = getEssayParameter('PARAM_SOURCEPATH')
+  param_targetpath     = getEssayParameter('PARAM_TARGETPATH')
+  param_feature_file   = getEssayParameter('PARAM_FEATURE_FILE')
+  param_feature_fields = getEssayParameter('PARAM_FEATURE_FIELDS')
+  param_topn_file      = getEssayParameter('PARAM_TOPN_FILE')
+  param_topn_fields    = getEssayParameter('PARAM_TOPN_FIELDS')
+  param_topn_regions   = getEssayParameter('PARAM_TOPN_REGIONS')
+  param_topn_from      = getEssayParameter('PARAM_TOPN_FROM')
+  param_topn_to        = getEssayParameter('PARAM_TOPN_TO')
+  param_vsm_common     = getEssayParameter('PARAM_VSM_COMMON')
+  param_vsm_pairs      = getEssayParameter('PARAM_VSM_PAIRS')
+  param_vsm_stopwords  = getEssayParameter('PARAM_VSM_STOPWORDS')
+
+  # ensures the journal slot (where all executions are recorded) is available
+  essay_beginning_ts = stimestamp()
+  slot  = join('..', 'journal', essayid, configid, essay_beginning_ts)
+  if(not exists(slot)): makedirs(slot)
+
+  # adjusts the output directory to account for essay and config IDs
+  param_targetpath += [essayid, configid]
 
   # ensures the folder where results will be saved is available and empty
   if(exists(join(*param_targetpath))):
@@ -62,10 +89,18 @@ def main():
   else:
     makedirs(join(*param_targetpath))
 
+  # initialises the random number generator
+  seed(ECO_SEED)
+
+  #---------------------------------------------------------------------------------------------
+  # This is where the job is actually done; the rest is boilerpate
+  #---------------------------------------------------------------------------------------------
+
   # loads Spotify's Audio Features dataset (D1)
-  ud.LogBuffer = []
   tsprint("Loading Spotify's Audio Track Features dataset")
   (features, id2name, name2id) = loadAudioFeatures(param_sourcepath, param_feature_file, param_feature_fields)
+  vsmparams = (param_vsm_common, param_vsm_pairs, param_vsm_stopwords)
+  reverso = buildReverso(id2name, vsmparams)
   tsprint('-- audio features of {0} songs have been loaded.'.format(len(features)))
 
   # loads the Spotify's Worldwide Daily Song Ranking dataset (D2)
@@ -73,10 +108,10 @@ def main():
   tsprint("Loading Spotify's Daily Song Rankings dataset")
   tsprint('-- considering streams made by users from {0} to {1} in {2}'.format(param_topn_from,
                                                                                param_topn_to,
-                                                                               param_topn_region))
+                                                                               param_topn_regions))
   (rankings, timeline, songs) = loadDailyRankings(param_sourcepath,
                                                   param_topn_file,
-                                                  param_topn_region,
+                                                  param_topn_regions,
                                                   param_topn_from,
                                                   param_topn_to)
 
@@ -85,7 +120,7 @@ def main():
 
   # builds the relationship between the datasets
   tsprint('Linking songs reported in daily rankings to their feature vectors')
-  (url2id, failures, cases, samples) = mapURL2ID(songs, id2name, name2id)
+  (url2id, failures, cases, samples) = mapURL2ID(songs, id2name, name2id, vsmparams)
   tsprint('-- {0} popular songs have been identified.'.format(len(songs)))
   tsprint('-- {0} popular songs were linked to their feature vector'.format(len(url2id)))
   tsprint('-- {0} popular songs remain unlinked'.format(len(failures)))
@@ -94,12 +129,13 @@ def main():
   # saves the data
   tsprint('Saving results')
 
-  # -- data from D1
+  # -- processed data from D1
   serialise(features, join(*param_targetpath, 'features'))
   serialise(id2name,  join(*param_targetpath, 'id2name'))
   serialise(name2id,  join(*param_targetpath, 'name2id'))
+  serialise(reverso,  join(*param_targetpath, 'reverso'))
 
-  # -- data from D2
+  # -- processed data from D2
   serialise(rankings, join(*param_targetpath, 'rankings'))
   serialise(timeline, join(*param_targetpath, 'timeline'))
   serialise(songs,    join(*param_targetpath, 'songs'))
@@ -112,9 +148,13 @@ def main():
   saveAsText(dict2text(cases),   join(*param_targetpath, 'cases.csv'))
   saveAsText(dict2text(samples), join(*param_targetpath, 'samples.csv'))
 
+  #---------------------------------------------------------------------------------------------
+  # That's all, folks! The job has been done, we are closing for the day.
+  #---------------------------------------------------------------------------------------------
+
   tsprint('Job completed.')
   saveLog(join(*param_targetpath, 'preprocess.log'))
 
 if __name__ == "__main__":
 
-  main()
+  main(sys.argv[1])

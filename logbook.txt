@@ -16,7 +16,79 @@ Logboek
 [4] Specialised blog posts describing evidence in support of [1] from analysis of data from the Deezer platform:
 		https://www.businessinsider.com/why-we-stop-discovering-new-music-around-age-30-2018-6?r=US&IR=T
 
-
 [5] Well, and now, this:
 		https://www.deezer-blog.com/press/almost-half-of-us-tell-musical-mistruths-global-study-reveals/
 		https://www.frontiersin.org/articles/10.3389/fpsyg.2021.633499/full
+
+[6/13/2021 10:53:01 AM] In P01/simulate.py, the simulated user study is predicated on a "surprise threshold", which is an idealised construct that corresponds to the degree of surprise above which:
+  (1) longer explanations are systematically preferred by participants, or
+  (2) participants systematically explore a larger share of additional information (motivation)
+
+  This script aims to estimate that threshold using datasets collected from the Spotify platform. The process is itself predicated on a number of conventions, premises and assumptions, which we make explicit in the following:
+
+  -----------
+  Conventions
+  -----------  
+  C1. Adopt a definition of `popularity` advanced by many authors [1][2] as a convention;
+  C2. Adopt a definition of `surprise`   advanced by Kaminskas and Bridge [3] as a convention;
+  C3. Adopt the definition of `relevant feature` from Tversky [4] as a convention. This definition describes how items are compared according to their features.
+
+  -----------
+  Premises 
+  -----------
+  {testable}
+  (From now on, the term 'item' refers to a music track served by the Spotify streaming platform)
+
+  P3. Assume that every user has at least one highly popular item in their profile;
+
+  -----------
+  Assumptions
+  -----------
+  A0. Owing to individual differences, high variability of the behaviour of interest is expected.
+      -- This means there is no hope for useful regularity at low cost in the individual level;
+      -- Thus, we focus on seeking useful regularity in the population-level;
+  A1. Assume that the available item features are relevant to the population of users [C3];
+  A2. Assume that the set of items that are highly popular in a given period of time are highly
+      similar (among themselves) than if compared to less-popular items [C1][C3][5];
+  A3. Assume that we have a representative sample of top N most popular items in a target region
+      (e.g., Brazil) nowadays;
+
+
+  Rationale
+  A1. From [P1] and [P2], we conclude that there is a region in item space within which most of
+      the popular items are confined {testable; assess average pop(i) for i interior/exterior to hull};
+
+  Evidence
+  To complete
+
+  Weaknesses
+  To complete
+
+  Bibliography
+
+  [1] Vargas, S., and Castells, P. (2011). Rank and relevance in novelty and diversity metrics
+      for recommender systems. In Proceedings of the 5th ACM Conference on Recommender Systems
+      (pp. 109-116).
+
+  [2] Kaminskas, M. and Bridge, D. (2016). Diversity, serendipity, novelty, and coverage: a
+      survey and empirical analysis of beyond-accuracy objectives in recommender systems.
+      ACM Transactions on Interactive Intelligent Systems (TiiS) 7.1: 1-42.
+
+  [3] Kaminskas, M. and Bridge, D. (2014). Measuring surprise in recommender systems.
+      Proceedings of the workshop on recommender systems evaluation: Dimensions and design
+      (Workshop programme of the 8th ACM conference on recommender systems).
+
+  [4] Tversky, A. (1977). Features of similarity. Psychological Review, 84(4), 327.
+
+  [5] To be selected; Candidates:
+
+      Bourdieu, P. (2008). Distinction: A social critique of the judgement of taste. Routledge.
+
+      Bourdieu, P. (1985). The market of symbolic goods. Poetics, 14(1-2), 13-44.
+      https://doi.org/10.1016/0304-422X(85)90003-8
+
+      Prior, N. (2013), Bourdieu and the Sociology of Music Consumption: A Critical Assessment of
+      Recent Developments. Sociology Compass, 7: 181-193. https://doi.org/10.1111/soc4.12020
+
+      Also keep an eye on Jonathan Kropf:
+      https://www.uni-kassel.de/fb05/fachgruppen-und-institute/soziologie/fachgebiete/soziologische-theorie/team/dr-jonathan-kropf
