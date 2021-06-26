@@ -1,13 +1,14 @@
 import sys
 import webbrowser
 import numpy as np
+import sharedDefs as ud
 
 from copy        import copy
 from os.path     import join, isfile, isdir, exists
 from collections import namedtuple, defaultdict
 from sharedDefs  import setupEssayConfig, getEssayParameter
 from sharedDefs  import deserialise, serialise
-from sharedDefs  import substitute
+from sharedDefs  import substitute, buildReverso
 from sklearn.decomposition import PCA
 
 ECO_SEED       = 23
@@ -15,7 +16,7 @@ ECO_CURSOR     = ':'
 ECO_PERPAGE    = 30
 ECO_PERROW     = 125
 ECO_TOPN       = 5
-ECO_LARGESS    = 50000
+#ECO_LARGESS    = 172230 # 586672
 ECO_GUESTUSER  = 'guest'
 ECO_WILDCARD   = '*'
 
@@ -49,12 +50,13 @@ def cosdist(v, w):
 
 class Jukebox:
 
-  def __init__(self, threshold, distfn, dataset, pairs):
+  def __init__(self, distfn, dataset, threshold, pairs, ss):
 
-    self.threshold = threshold
     self.distfn    = distfn
     self.dataset   = dataset
+    self.threshold = threshold
     self.pairs     = pairs
+    self.ss        = ss
 
     self.working   = []
     self.filters   = defaultdict(list)
@@ -82,8 +84,9 @@ class Jukebox:
     # samples the catalog for suggestions
     L = []
     v = self._averagevec()
-    candidates  = np.random.choice(list(self.dataset.id2name), ECO_LARGESS).tolist()
-    candidates += self.popular
+    #candidates  = np.random.choice(list(self.dataset.id2name), self.ss).tolist()
+    #candidates += self.popular
+    candidates  = list(self.dataset.id2name)
     candidates  = [itemID for itemID in candidates if itemID not in self.profile]
     for itemID in set(candidates):
       w = self.itemvecs[itemID]
@@ -102,7 +105,7 @@ class Jukebox:
     if('s' in tokens):
       last = ECO_TOPN
       for i in range(ECO_TOPN):
-        for k in range(last, ECO_LARGESS):
+        for k in range(last, self.ss):
           if(L[k][2] <= self.threshold):
             suggestions.append(L[k][0])
             last = k+1
@@ -111,11 +114,15 @@ class Jukebox:
     return suggestions
 
   def _parse(self, cmd):
-    tokens = cmd.strip().lower().split(' ')
-    action = tokens[0]
-    params = tokens[1:]
+    tokens = list(filter(None, [token for token in cmd.strip().lower().split(' ')]))
+    try:
+      action = tokens[0]
+      params = tokens[1:]
+    except IndexError:
+      action = ACTION_NONE
+      params = []
 
-    if(action in ['rr', 'rs', 'fa', 'fy', 'fp']):
+    if(action in ['rr', 'rs', 'fa', 'fy', 'fp', 'f.']):
       params = [action[1]] + params
       action = action[0]
 
@@ -146,31 +153,31 @@ class Jukebox:
     res = True
     (action, params) = self._parse(cmd)
 
-    #try:
-    if(  action == ACTION_SEARCH):  res = self.action_search(params)
-    elif(action == ACTION_FILTER):  res = self.action_setFilter(params)
-    elif(action == ACTION_LISTW):   res = self.action_listWorking()
-    elif(action == ACTION_LISTP):   res = self.action_listProfile()
-    elif(action == ACTION_LISTU):   res = self.action_listUsers()
-    elif(action == ACTION_P2W):     res = self.action_profile2working()
-    elif(action == ACTION_W2P):     res = self.action_working2profile()
-    elif(action == ACTION_ADDTOP):  res = self.action_addToProfile(params)
-    elif(action == ACTION_DELFRP):  res = self.action_delFrProfile(params)
-    elif(action == ACTION_VECTOR):  res = self.action_showVector(params)
-    elif(action == ACTION_SUGGEST): res = self.action_suggest(params)
-    elif(action == ACTION_COMPARE): res = self.action_compare(params)
-    elif(action == ACTION_TOGGLE):  res = self.action_toggle()
-    elif(action == ACTION_USER):    res = self.action_switchUser(params)
-    elif(action == ACTION_PLAY):    res = self.action_play(params)
-    elif(action == ACTION_CHNDIMS): res = self.action_changeItemspace(params)
+    try:
+      if(  action == ACTION_SEARCH):  res = self.action_search(params)
+      elif(action == ACTION_FILTER):  res = self.action_setFilter(params)
+      elif(action == ACTION_LISTW):   res = self.action_listWorking()
+      elif(action == ACTION_LISTP):   res = self.action_listProfile()
+      elif(action == ACTION_LISTU):   res = self.action_listUsers()
+      elif(action == ACTION_P2W):     res = self.action_profile2working()
+      elif(action == ACTION_W2P):     res = self.action_working2profile()
+      elif(action == ACTION_ADDTOP):  res = self.action_addToProfile(params)
+      elif(action == ACTION_DELFRP):  res = self.action_delFrProfile(params)
+      elif(action == ACTION_VECTOR):  res = self.action_showVector(params)
+      elif(action == ACTION_SUGGEST): res = self.action_suggest(params)
+      elif(action == ACTION_COMPARE): res = self.action_compare(params)
+      elif(action == ACTION_TOGGLE):  res = self.action_toggle()
+      elif(action == ACTION_USER):    res = self.action_switchUser(params)
+      elif(action == ACTION_PLAY):    res = self.action_play(params)
+      elif(action == ACTION_CHNDIMS): res = self.action_changeItemspace(params)
+      elif(action == ACTION_NONE):    res = True
+      elif(action == ACTION_END):     res = False
+      else:
+        print('--- command not recognised.')
 
-    elif(action == ACTION_NONE):    res = True
-    elif(action == ACTION_END):     res = False
-    else:
-      print('--- command not recognised.')
-    #except:
-    #  print('-- error processing command.')
-    #  None
+    except:
+      print('-- error processing command.')
+      None
 
     return res
 
@@ -195,7 +202,10 @@ class Jukebox:
             candidates[itemID] += 1
         except KeyError:
           None
-    maxMatches = max(candidates.values())
+    if(len(candidates) > 0):
+      maxMatches = max(candidates.values())
+    else:
+      maxMatches = 0
 
     # removes candidate items that do not match the current artist-filter
     numOfTokens = len(self.filters['a'])
@@ -270,6 +280,7 @@ class Jukebox:
 
   def action_working2profile(self):
     self.dataset.profiles[self.current] = copy(self.working)
+    self.profile = self.dataset.profiles[self.current]
     return True
 
   def action_showVector(self, params):
@@ -304,7 +315,8 @@ class Jukebox:
     for i in range(len(self.profile)):
       if(i not in idxs):
         L.append(self.profile[i])
-    self.profile = L
+    self.dataset.profiles[self.current] = L
+    self.profile = self.dataset.profiles[self.current]
     return True
 
   def action_suggest(self, params):
@@ -382,7 +394,7 @@ class Jukebox:
     if(ndims in [0, self.maxdims]):
       self.itemvecs  = self.dataset.features
       print('--- changed to original dimensionality')
-    if(ndims > 1 and ndims < self.maxdims):
+    elif(ndims > 1 and ndims < self.maxdims):
       itemIDs = sorted(self.dataset.features)
       Q   = np.vstack([self.dataset.features[itemID] for itemID in itemIDs])
       pca = PCA(n_components = ndims, svd_solver = 'arpack', random_state = ECO_SEED)
@@ -409,7 +421,10 @@ def main(configFile):
   param_sourcepath     = getEssayParameter('PARAM_TARGETPATH')
   param_sourcepath    += [essayid, configid]
   param_feature_fields = getEssayParameter('PARAM_FEATURE_FIELDS')
+  param_vsm_common     = getEssayParameter('PARAM_VSM_COMMON')
   param_vsm_pairs      = getEssayParameter('PARAM_VSM_PAIRS')
+  param_vsm_stopwords  = getEssayParameter('PARAM_VSM_STOPWORDS')
+  param_largess        = getEssayParameter('PARAM_LARGESS')
   param_threshold      = getEssayParameter('PARAM_THRESHOLD')
   param_browser        = getEssayParameter('PARAM_BROWSER')
 
@@ -418,7 +433,13 @@ def main(configFile):
   features = deserialise(join(*param_sourcepath, 'features'))
   id2name  = deserialise(join(*param_sourcepath, 'id2name'))
   url2id   = deserialise(join(*param_sourcepath, 'url2id'))
-  reverso  = deserialise(join(*param_sourcepath, 'reverso'))
+
+  try:
+    reverso  = deserialise(join(*param_sourcepath, 'reverso'))
+  except FileNotFoundError:
+    vsmparams = (param_vsm_common, param_vsm_pairs, param_vsm_stopwords)
+    reverso = buildReverso(id2name, vsmparams)
+    serialise(reverso, join(*param_sourcepath, 'reverso'))
 
   try:
     profiles = deserialise(join(*param_sourcepath, 'jukebox'))
@@ -428,7 +449,7 @@ def main(configFile):
   # initialises the background resources
   webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(join(*param_browser)))
   dataset  = Database(profiles, reverso, id2name, url2id, features, param_feature_fields)
-  jukebox = Jukebox(param_threshold, euclidist, dataset, param_vsm_pairs)
+  jukebox = Jukebox(euclidist, dataset, param_threshold, param_vsm_pairs, param_largess)
 
   # attends to the command line
   print('   Ready. Enter your command and press enter.')

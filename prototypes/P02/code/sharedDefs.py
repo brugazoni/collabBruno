@@ -2,6 +2,7 @@ import re
 import os
 import pickle
 import codecs
+import random
 import numpy as np
 import scipy as sp
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ import bootstrapped.stats_functions as bs_stats
 
 from copy           import copy
 from scipy          import stats
-from random         import random, sample
+from random         import random, randint, sample
 from pandas         import read_csv
 from datetime       import datetime, timedelta
 from itertools      import chain
@@ -412,7 +413,7 @@ def buildReverso(id2name, vsmparams):
 
     (name, artists, year) = id2name[itemID]
 
-    tokens = set(substitute(name.lower(), pairs).split()).difference(stopWords)
+    tokens = set(filter(None, substitute(name.lower(), pairs).split())).difference(stopWords)
     for token in tokens:
       reverso[token].append(itemID)
 
@@ -1003,10 +1004,10 @@ def plotHull(hull, Q_, interior, distStats, rawData, filename):
 
   return None
 
-def playHull(hull, Q_, interior, distStats, filename = None, saveit = True):
+def playHull(hull, Q_, interior, distStats, samples, filename = None, saveit = True):
 
-  # unpacks parameters
-  #(unitsizew, unitsizeh) = (1.940, 1.916)
+  # unpacks/determines parameters
+  (allPopIDs, allRegIDs, popIDs, regIDs) = samples
   (unitsizew, unitsizeh) = (2.000, 1.916)
   (nrows, ncols) = (3, 3)
   nd = Q_.shape[1]
@@ -1045,50 +1046,112 @@ def playHull(hull, Q_, interior, distStats, filename = None, saveit = True):
 
   # plots the points in Q that are exterior to Hull(P)
   tsprint('-- rendering items in 3D itemspace')
-  (firstInt, firstExt) = (True, True)
   for (isInterior, v) in zip(interior, Q):
     if(not isInterior):
-      if(firstExt):
-        panel1.plot(v[0], v[1], v[2], exterior_pttrn_1.replace('-', '+'), label = 'Regular (exterior)')
-        firstExt = False
-      else:
-        panel1.plot(v[0], v[1], v[2], exterior_pttrn_1.replace('-', '+'))
+      sc = panel1.plot(v[0], v[1], v[2], exterior_pttrn_1.replace('-', '+'), markersize=4)
 
   # plots the highly popular items
-  panel1.plot(V[:,0], V[:,1], V[:,2], pop_pttrn_1.replace('-', 'o'), label='Highly popular')
+  panel1.plot(V[:,0], V[:,1], V[:,2], pop_pttrn_1.replace('-', 'o'), markersize=3, alpha=0.20, label='Highly popular')
 
   # plots the points in Q that are interior to Hull(P)
-  (firstInt, firstExt) = (True, True)
   for (isInterior, v) in zip(interior, Q):
     if(isInterior):
-      if(firstInt):
-        panel1.plot(v[0], v[1], v[2], interior_pttrn_1.replace('-', '+'), label = 'Popular (interior)')
-        firstInt = False
-      else:
-        panel1.plot(v[0], v[1], v[2], interior_pttrn_1.replace('-', '+'))
+      panel1.plot(v[0], v[1], v[2], interior_pttrn_1.replace('-', '+'), markersize=4)
 
   # if original data in 2D, plots the boundaries of the hull
   if(nd == 3):
     for simplex in hull.simplices:
-      panel1.plot(V[simplex, 0], V[simplex, 1], V[simplex, 2], interior_pttrn_2)
+      panel1.plot(V[simplex, 0], V[simplex, 1], V[simplex, 2], interior_pttrn_2, markersize=4)
 
   if(saveit):
 
+    # runs the animation
+    movements   = [360,  60, 360,  60, 60, 360, 61]
+    transitions = [sum(movements[:i+1]) for i in range(len(movements))]
+    numOfFrames = sum(movements)
+    # [360, 420, 780, 840, 900, 1260, 1320]
+
     def rotate_azim(i):
-      if(i < 360):
-        panel1.view_init(elev=10., azim=i)
+
+      if(i < transitions[0]):
+        (elev, azim) = (0., i)  # cw  rotation on Z
+      elif(i < transitions[1]):
+        (elev, azim) = (i, 0.)  # cw  rotation on Y
+        elev -= transitions[0]
+      elif(i < transitions[2]):
+        (elev, azim) = (movements[1], i) # ccw rotation on Z
+        azim -= transitions[2]
+        azim *= -1
+      elif(i < transitions[3]):
+        (elev, azim) = (i, 0.)  # ccw rotation on Y
+        elev -= transitions[3]
+        elev *= -1
+      elif(i < transitions[4]):
+        (elev, azim) = (i, 0.)  # ccw rotation on Y
+        elev -= transitions[4]
+        elev  = -(movements[4] + elev)
+      elif(i < transitions[5]):
+        (elev, azim) = (-movements[4], i) # ccw rotation on Z
+        azim -= transitions[5]
+        azim  = -(movements[5] + azim)
+      elif(i <= transitions[6]):
+        (elev, azim) = (i, 0.)  # cw  rotation on Y
+        elev -= transitions[6]
+
       else:
-        panel1.view_init(azim=10., elev=i)
-      print('.', end = '')
+        (elev, azim) = (0., 0.)
+
+
+      print('{0}\t{1}\t{2}'.format(i, elev, azim))
+      panel1.view_init(elev=elev, azim=azim)
       return fig,
 
-    tsprint('-- rendering and saving the animation')
-    anim = animation.FuncAnimation(fig, rotate_azim, init_func=None,
-                                   frames=720, interval=200, blit=True)
+    #    cw rotation on Z      cw rotation on Y      ccw rotation on Z     ccw on Y
+    # [---------------------[---------------------[---------------------[---------------------]
+    # 0                    360                   420                   780                   840
 
-    anim.save(filename, fps=5, extra_args=['-vcodec', 'libx264'])
+    anim = animation.FuncAnimation(fig, rotate_azim, init_func=None,
+                                   frames=numOfFrames, interval=200, blit=True)
+                                   #frames=720, interval=200, blit=True)
+                                   #frames=641, interval=200, blit=True)
+
+    # saves the animation
+    anim.save(filename, fps=30, extra_args=['-vcodec', 'libx264'])
 
   else:
+
+    names = np.array(['{1}: {0}'.format(i, regIDs[i]) for i in range(Q.shape[0])])
+
+    annot = panel1.annotate('', xy=(0,0), xytext=(20,20), textcoords='offset points',
+                        bbox=dict(boxstyle='round', fc='w'),
+                        arrowprops=dict(arrowstyle='->'))
+
+    annot.set_visible(False)
+
+    def update_annot(ind):
+
+      pos  = sc.get_offsets()[ind['ind'][0]]
+      text = '{0}: {1}'.format(ind['ind'][0], names[ind['ind'][0]])
+      annot.xy = pos
+      annot.set_text(text)
+      annot.get_bbox_patch().set_alpha(0.6)
+
+    def hover(event):
+      vis = annot.get_visible()
+      if event.inaxes == panel1:
+        cont, ind = sc.contains(event)
+        print('cont: {0}'.format(cont))
+        print('ind : {0}'.format(ind))
+        if cont:
+          update_annot(ind)
+          annot.set_visible(True)
+          fig.canvas.draw_idle()
+        else:
+          if vis:
+            annot.set_visible(False)
+            fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("motion_notify_event", hover)
 
     plt.show()
 
@@ -1165,3 +1228,361 @@ def buildDataset(url2id, features, featureFields, n_components = 2, epsilon = 1.
   samples = (allPopIDs, allRegIDs, popIDs, regIDs)
 
   return (P, Q, samples, ev)
+
+
+#-----------------------------------------------------------------------------------------------------------
+# General purpose definitions - analyses of relevant hypotheses based on survey data
+#-----------------------------------------------------------------------------------------------------------
+
+def loadSurveyData(sourcepath, surveyFile):
+
+  """
+  Because the survey file has not being encoded as a proper CSV file, a lot of parsing is needed.
+
+  What is a proper CSV file, Andre? you might ask. And my answer would be somewhat like this:
+  Well, it is file encoded following the some version of the RFC 4180 spec:
+  https://www.ietf.org/rfc/rfc4180.txt
+  https://www.loc.gov/preservation/digital/formats/fdd/fdd000323.shtml
+  Moreover, most integration developers would expect a CSV file to be a flat file, meaning that
+  NO TREES ARE ENCODED AS A FIELD, which is the predominant case of this survey file.
+  """
+
+  def _cast(row, field, field2col):
+    val = row[field2col[field]]
+    if(field in ['id', 'faixa']):
+      res = int(val)
+    elif(field == 'musicasperfil'):
+      res = _parse_musicasperfil(val)
+    elif(field == 'vetperfil'):
+      if(val[0:2] == '[['):
+        res = np.array(eval(val))
+      else:
+        res = np.array(eval('[{0}]'.format(val)))
+    elif(field == 'musicasrec'):
+      res = _parse_musicasrec(val)
+    elif(field == 'youtube'):
+      res = [val if type(val) == int else 0 for val in eval(val)]
+    else:
+      res = eval(val)
+    return res
+
+  def _parse_musicasperfil(val):
+    res = []
+    for (songName, artist, so, _year) in eval(val):
+      itemID = None # xxx try to identify the track
+      res.append((so, itemID, songName, artist, int(_year)))
+    res.sort(key = lambda e: e[0])
+    return res
+
+  def _parse_musicasrec(val):
+    res = []
+    for (acousticness, _artists, danceability, duration_ms, energy, explicit, itemID,
+         instrumentalness, key, liveness, loudness, mode, name, popularity,
+         _release_date, speechiness, tempo, valence, year, youtubeclicks, youtubeID) in eval(val):
+      itemvec = np.array((acousticness, danceability, duration_ms, energy, explicit,
+                          instrumentalness, key, liveness, loudness, mode, popularity,
+                          speechiness, tempo, valence, year))
+      res.append((itemID, itemvec))
+    return res
+
+  # recovers the content of the file
+  (header, *rows) = file2List(os.path.join(*sourcepath, surveyFile), separator = '\t', erase = '')
+  field2col = {header[i]: i for i in range(len(header))}
+
+  # recovers the answers collected in the survey
+  caseRecord   = {}
+  measurements = defaultdict(dict)
+  for row in rows:
+
+    caseID      = _cast(row, 'id',             field2col)
+    profile     = _cast(row, 'musicasperfil',  field2col)
+    averagevec  = _cast(row, 'vetperfil',      field2col)
+    recommended = _cast(row, 'musicasrec',     field2col)
+    commentresp = _cast(row, 'commentsresp',   field2col)
+    commentreev = _cast(row, 'commentsreeval', field2col)
+    youtube     = _cast(row, 'youtube',        field2col)
+    demographic = _cast(row, 'faixa',          field2col)
+
+    caseRecord[caseID] = (profile, averagevec, recommended, commentresp, commentreev, youtube, demographic)
+
+    for k in range(len(recommended)):
+      (itemID, _) = recommended[k]
+
+      # computes the S measurement
+      s1 = _cast(row, 'resp1', field2col)[k]
+      s2 = _cast(row, 'resp2', field2col)[k]
+      s3 = _cast(row, 'resp3', field2col)[k]
+      s4 = _cast(row, 'resp4', field2col)[k]
+      #S  = sum([4 * (1 - s1) + 1, 6 - s2, 6 - s3, s4])
+
+      # xxx check this composition with factor analysis
+      S  = 0
+      S += 4 * (1 - s1) + 1
+      #S += 6 - s2
+      S += 6 - s3
+      S += s4
+
+      # computes the I0 measurement
+      i1 = _cast(row, 'resp5', field2col)[k]
+      i2 = _cast(row, 'resp6', field2col)[k]
+      I0 = sum([i1, i2])
+
+      # computes the E measurements
+      e1 = (_cast(row, 'clicoutom1',    field2col)[k], _cast(row, 'clicoutom2',    field2col)[k])
+      e2 = (_cast(row, 'clicoudin1',    field2col)[k], _cast(row, 'clicoudin2',    field2col)[k])
+      e3 = (_cast(row, 'clicouritm1',   field2col)[k], _cast(row, 'clicouritm2',   field2col)[k])
+      e4 = (_cast(row, 'clicoutextu1',  field2col)[k], _cast(row, 'clicoutextu2',  field2col)[k])
+      e5 = (_cast(row, 'clicououtros1', field2col)[k], _cast(row, 'clicououtros2', field2col)[k])
+      E  = np.array([[e1[0], e2[0], e3[0], e4[0], e5[0]],
+                     [e1[1], e2[1], e3[1], e4[1], e5[1]]])
+
+      # computes the I1 measurement
+      # xxx we screw this one up
+      I1 = 0
+
+      # computes the X measurement
+      x1 = _cast(row, 'reevaluate1', field2col)[k]
+      x2 = _cast(row, 'reevaluate2', field2col)[k]
+      x3 = _cast(row, 'reevaluate3', field2col)[k]
+      X  = sum([x1, x2, x3])
+
+      # stores the measurements
+      responses = (s1, s2, s3, s4, i1, i2, e1, e2, e3, e4, e5, x1, x2, x3)
+      measurements[caseID][itemID] = (S, I0, E, I1, X, responses)
+
+  # converts a defaultdict to standard dict
+  measurements = dict(measurements)
+
+  return (caseRecord, measurements)
+
+def applyQualityCriteria(caseRecord, rawMeasurements):
+
+  ECO_SIM_THRESHOLD = 2/3 #3/7
+
+  ECO_REJECT_C1 = 'C1. Invalid profile average vector'
+  ECO_REJECT_C2 = 'C2. Duplicated profile assumed as multiple participation'
+  ECO_REJECT_C3 = 'C3. Highly similar profile assumed as multiple participation'
+  ECO_REJECT_C4 = 'C4. Similar profile assumed as multiple participation'
+  ECO_REJECT_C5 = 'C5. Profile with identical song names assumed as multiple participation'
+  ECO_REJECT_C6 = 'C6. Profile with identical artist line up assumed as multiple participation'
+  ECO_REJECT_D1 = 'D1. Invalid value in response collected in Task 3a'
+  ECO_REJECT_D2 = 'D2. Invalid value in response collected in Task 3c'
+
+  def similarity(e, S, _cast = None):
+    if(len(S) > 0):
+      if(_cast == None):
+        _cast = lambda e: e
+      js = lambda s1, s2: len(s1.intersection(s2)) / len(s1.union(s2))
+      s = set(_cast(e))
+      res = max([js(s, _cast(s_)) for s_ in S])
+    else:
+      res = 0.0
+    return res
+
+  def isValid(response):
+    return response in [1, 2, 3, 4, 5]
+
+  rejected = {}
+  previousProfiles = []
+  list2songart = lambda s: set(['{0}.{1}'.format(e[2].lower(), e[3].lower()) for e in s])
+  list2song    = lambda s: set(['{0}'.format(e[2].lower())                   for e in s])
+  list2art     = lambda s: set(['{0}'.format(e[3].lower())                   for e in s])
+
+  for caseID in caseRecord:
+    (profile, averagevec, recommended, commentresp, commentreev, youtube, demographic) = caseRecord[caseID]
+
+    if(averagevec.shape[0] != 1 or averagevec.shape[1] != 15):
+      rejected[caseID] = ECO_REJECT_C1
+
+    elif(similarity(profile, previousProfiles)               == 1.0):
+      rejected[caseID] = ECO_REJECT_C2
+
+    elif(similarity(profile, previousProfiles)               >= ECO_SIM_THRESHOLD):
+      rejected[caseID] = ECO_REJECT_C3
+
+    elif(similarity(profile, previousProfiles, list2songart) >= ECO_SIM_THRESHOLD):
+      rejected[caseID] = ECO_REJECT_C4
+
+    elif(similarity(profile, previousProfiles, list2song)    >= ECO_SIM_THRESHOLD):
+      rejected[caseID] = ECO_REJECT_C5
+
+    elif(similarity(profile, previousProfiles, list2art)     == ECO_SIM_THRESHOLD):
+      rejected[caseID] = ECO_REJECT_C6
+
+    else:
+
+      # checks encoded responses
+      for itemID in rawMeasurements[caseID]:
+
+        (S, I0, E, I1, X, responses) = rawMeasurements[caseID][itemID]
+        (s1, s2, s3, s4, i1, i2, e1, e2, e3, e4, e5, x1, x2, x3) = responses
+
+        if(s1 not in [0, 1]   or
+              not isValid(s2) or
+              not isValid(s3) or
+              not isValid(s4) or
+              not isValid(i1) or
+              not isValid(i2)):
+
+          rejected[caseID] = ECO_REJECT_D1
+
+        elif(E.sum() > 0 and (not isValid(x1) or
+                              not isValid(x2) or
+                              not isValid(x3))):
+
+          rejected[caseID] = ECO_REJECT_D2
+
+    previousProfiles.append(set(profile))
+
+  measurements = {}
+  for caseID in rawMeasurements:
+    if caseID not in rejected:
+      measurements[caseID] = rawMeasurements[caseID]
+
+  return (rejected, measurements)
+
+def measurements2text(measurements):
+
+  mask = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}'
+  header = mask.format('Case', 'Item', 'S', 'I0', 'E', 'I1', 'X')
+  content = [header]
+  for caseID in measurements:
+    for itemID in measurements[caseID]:
+      (S, I0, E, I1, X, _) = measurements[caseID][itemID]
+      content.append(mask.format(caseID,
+                                 itemID,
+                                 S,
+                                 I0,
+                                 str(E[0].tolist()) + str(E[1].tolist()),
+                                 I1,
+                                 X))
+  return '\n'.join(content)
+
+def testHypotheses(measurements):
+
+  ECO_POINT_SIZE =  40
+  ECO_BOOTSS     = 100
+  ECO_RESS       = .15
+
+  assessments = {}
+
+  #-------------------------------------------------------------------------
+  # test hypothesis H1: there is an association between S and E
+  #-------------------------------------------------------------------------
+  tsprint('-- assessing hypothesis H1')
+  sample1 = []
+  for caseID in measurements:
+    for itemID in measurements[caseID]:
+      (S, I0, E, I1, X, responses) = measurements[caseID][itemID]
+      #epsilon = (-1)**randint(0,1) * randint(0,3)
+      #sample1.append((S, .2*S + 1 + epsilon))
+      sample1.append((S, E.sum()))
+  #sample1=set(sample1)
+
+  # fits a linear model to the survey data and assess the hypothesis
+  (S_, E_) = zip(*sample1)
+  xmax = max(S_)
+  res  = stats.linregress(S_, E_)
+  if(res.pvalue <= 0.05):
+    assessments['H1'] = 'The data support the hypothesis of linear association between reported surprise (S) and additional information sought (E); p-value {0:6.4f}, slope {1:6.4f}, intercept {2:6.4f}'.format(res.pvalue, res.slope, res.intercept)
+  else:
+    assessments['H1'] = 'The data do not support the hypothesis of linear association between reported surprise (S) and additional information sought (E): p-value {0:6.4f}, slope {1:6.4f}, intercept {2:6.4f}'.format(res.pvalue, res.slope, res.intercept)
+  tsprint('   H1\t{0}'.format(assessments['H1']))
+
+  # obtains bootstrap estimate of parameters of the linear model
+  samparams = []
+  for _ in range(ECO_BOOTSS):
+    resample = sample(sample1, int(len(sample1) * ECO_RESS))
+    (s_, e_) = zip(*resample)
+    aux = stats.linregress(s_, e_)
+    samparams.append((aux.slope, aux.intercept))
+  (alphas, intercepts) = zip(*samparams)
+  rea = bs.bootstrap(np.array(alphas),     stat_func=bs_stats.mean)
+  rei = bs.bootstrap(np.array(intercepts), stat_func=bs_stats.mean)
+
+  # plots the results
+  repeats = defaultdict(int)
+  for (s,e) in sample1:
+    repeats[(s,e)] += ECO_POINT_SIZE
+  (ss, ee, size) = zip(*[(s, e, repeats[(s,e)]) for (s,e) in repeats])
+
+  fig, ax = plt.subplots(figsize=(9, 9))
+  ax.scatter(ss, ee, size)
+
+  ax.plot([0, xmax], [rei.lower_bound, rea.lower_bound * xmax + rei.lower_bound], 'g:')
+  ax.plot([0, xmax], [rei.upper_bound, rea.lower_bound * xmax + rei.upper_bound], 'g:')
+  ax.plot([0, xmax], [rei.lower_bound, rea.upper_bound * xmax + rei.lower_bound], 'g:')
+  ax.plot([0, xmax], [rei.upper_bound, rea.upper_bound * xmax + rei.upper_bound], 'g:')
+
+  ax.plot([0, xmax], [res.intercept,   res.slope       * xmax + res.intercept],   'r-')
+
+  ax.set_xlabel('Reported surprise (S)', fontsize=12)
+  ax.set_ylabel('# clicks on additional information (E)', fontsize=12)
+  ax.set_title('Hypothesis H1: Association between Reported Surprise (S) and Information Sought (E)', fontsize=14)
+
+  #xxx legend
+
+  ax.grid(True)
+  fig.tight_layout()
+
+  #print('-- rendering the plot.')
+  plt.show()
+  #print('   figure width is {0} and height is {1}'.format(fig.get_figwidth(), fig.get_figheight()))
+
+
+  #-------------------------------------------------------------------------
+  # test hypothesis H2: There is a preferred category of information
+  #-------------------------------------------------------------------------
+  tsprint('-- assessing hypothesis H2')
+  def ciCompare(a, b):
+
+    (inca, incb) = (0, 0)
+    # checks if the two confidence intervals overlap
+    lb = max(a.lower_bound, b.lower_bound)
+    ub = min(a.upper_bound, b.upper_bound)
+
+    if((ub - lb) < 0.0):
+      # the intervals do not overlap, so one of them is above the supreme of another
+      if(a.lower_bound > b.upper_bound):
+        inca = 1
+      else:
+        incb = 1
+
+    return (inca, incb)
+
+  sample2 = []
+  for caseID in measurements:
+    for itemID in measurements[caseID]:
+      (S, I0, E, I1, X, responses) = measurements[caseID][itemID]
+      sample2.append((E[:,0].sum(), E[:,1].sum(), E[:,2].sum(), E[:,3].sum(), E[:,4].sum()))
+
+  categories = list(zip(*sample2))
+  noc  = len(categories)
+  cie  = [bs.bootstrap(np.array(ej), stat_func=bs_stats.mean) for ej in categories]
+
+  for i in range(noc):
+    tsprint('   category {0}: from {1:6.4f} to {2:6.4f}'.format(i, cie[i].lower_bound, cie[i].upper_bound))
+
+  best = noc * [0]
+  for i in range(noc - 1):
+    for j in range(i, noc):
+      (addtoi, addtoj) = ciCompare(cie[i], cie[j])
+      best[i] += addtoi
+      best[j] += addtoj
+
+  if(max(best) == noc):
+    assessments['H2'] = 'There is a preferred category of additional information: {0}'.format(best)
+  else:
+    assessments['H2'] = 'There is no preferred category of additional information: {0}'.format(best)
+
+  tsprint('   H2\t{0}'.format(assessments['H2']))
+  #-------------------------------------------------------------------------------------
+  # test hypothesis H3: There is an effect of explanation (E) on intention to follow (I)
+  #-------------------------------------------------------------------------------------
+
+  # xxx data to assess this hypotheses was not collected
+  assessments['H3'] = 'Hypothesis not assessed.'
+  tsprint('   H3\t{0}'.format(assessments['H3']))
+
+  return assessments
+

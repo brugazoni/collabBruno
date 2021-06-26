@@ -30,11 +30,13 @@ def main(ndims, configFile):
   Q        = deserialise(join(*param_sourcepath, 'Q'))
   hull     = deserialise(join(*param_sourcepath, 'hull'))
   stats    = deserialise(join(*param_sourcepath, 'stats'))
+  samples  = deserialise(join(*param_sourcepath, 'samples'))
   interior = deserialise(join(*param_sourcepath, 'interior'))
 
   # creating the animation
+  
   tsprint('Creating an animation of the {0}D projection'.format(ndims))
-  playHull(hull, Q, interior, stats, join(*param_targetpath, 'itemspace_{0}d.mp4'.format(ndims)), param_saveit)
+  playHull(hull, Q, interior, stats, samples, join(*param_targetpath, 'itemspace_{0}d.mp4'.format(ndims)), param_saveit)
 
 if(__name__ == '__main__'):
 
