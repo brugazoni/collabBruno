@@ -23,6 +23,7 @@ def main(configFile):
   param_survey_file = getEssayParameter('PARAM_SURVEY_FILE')
   param_targetpath  = getEssayParameter('PARAM_TARGETPATH')
   param_targetpath += [essayid, configid]
+  param_youtubeok  =  getEssayParameter('PARAM_YOUTUBEOK')
 
   # loads required data
   tsprint('Loading preprocessed data')
@@ -38,9 +39,11 @@ def main(configFile):
   tsprint('-- {0:3d} cases were recovered.'.format(len(caseRecord)))
 
   # applies data quality criteria to identify data to be discarded
-  (rejected, measurements) = applyQualityCriteria(caseRecord, rawMeasurements)
+  (rejected, measurements, accepted, discarded) = applyQualityCriteria(caseRecord, rawMeasurements, param_youtubeok)
   saveAsText(dict2text(rejected), join(*param_targetpath, 'rejected.csv'))
-  tsprint('-- {0:3d} cases were rejected.'.format(len(rejected)))
+  discardedCases = len(set([caseID for (caseID, _) in rejected]))
+  tsprint('-- {0:3d} cases    out of {1:3d} were found to fail some quality criterion.'.format(discardedCases, len(caseRecord)))
+  tsprint('-- {0:3d} replicas out of {1:3d} were discarded.'.format(discarded, accepted + discarded))
   saveAsText(measurements2text(measurements), join(*param_targetpath, 'measurements.csv'))
 
   # analyses the data (to assess the relevant hypotheses)

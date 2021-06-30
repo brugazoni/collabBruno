@@ -29,6 +29,7 @@ ECO_PRECISION = 1E-9
 ECO_DATETIME_FMT = '%Y%m%d%H%M%S' # used in logging
 ECO_RAWDATEFMT   = '%Y-%m-%d'     # used in file/memory operations
 ECO_FIELDSEP     = ','
+ECO_ALLREPLICAS  = '*'
 
 FakeHull = namedtuple('FakeHull', ['points', 'vertices', 'simplices'])
 
@@ -168,10 +169,8 @@ def setEssayParameter(param, value):
   elif(so_param in ['PARAM_SOURCEPATH',    'PARAM_TARGETPATH',   'PARAM_FEATURE_FIELDS',
                     'PARAM_TOPN_FIELDS',   'PARAM_TOPN_REGIONS', 'PARAM_IGNORELINKS',
                     'PARAM_SAMPLINGPROBS', 'PARAM_DIMS',         'PARAM_EPSS',
-                    'PARAM_BROWSER',       'PARAM_VSM_PAIRS',    'PARAM_VSM_STOPWORDS']):
-
-
-
+                    'PARAM_BROWSER',       'PARAM_VSM_PAIRS',    'PARAM_VSM_STOPWORDS',
+                    'PARAM_YOUTUBEOK']):
 
     so_value = value
 
@@ -276,6 +275,9 @@ def loadEssayConfig(configFile):
 
       if('PARAM_VSM_STOPWORDS' in EssayParameters):
         EssayParameters['PARAM_VSM_STOPWORDS']  = eval(EssayParameters['PARAM_VSM_STOPWORDS'][0])
+
+      if('PARAM_YOUTUBEOK' in EssayParameters):
+        EssayParameters['PARAM_YOUTUBEOK']  = eval(EssayParameters['PARAM_YOUTUBEOK'][0])
 
       # checks if configuration is ok
       (check, errors) = checkEssayConfig(configFile)
@@ -1240,7 +1242,7 @@ def loadSurveyData(sourcepath, surveyFile):
   Because the survey file has not being encoded as a proper CSV file, a lot of parsing is needed.
 
   What is a proper CSV file, Andre? you might ask. And my answer would be somewhat like this:
-  Well, it is file encoded following the some version of the RFC 4180 spec:
+  Well, it is file encoded according to some version of the RFC 4180 spec:
   https://www.ietf.org/rfc/rfc4180.txt
   https://www.loc.gov/preservation/digital/formats/fdd/fdd000323.shtml
   Moreover, most integration developers would expect a CSV file to be a flat file, meaning that
@@ -1296,6 +1298,7 @@ def loadSurveyData(sourcepath, surveyFile):
 
     caseID      = _cast(row, 'id',             field2col)
     profile     = _cast(row, 'musicasperfil',  field2col)
+    youtubeok   = _cast(row, 'youtubeok',      field2col)
     averagevec  = _cast(row, 'vetperfil',      field2col)
     recommended = _cast(row, 'musicasrec',     field2col)
     commentresp = _cast(row, 'commentsresp',   field2col)
@@ -1303,24 +1306,26 @@ def loadSurveyData(sourcepath, surveyFile):
     youtube     = _cast(row, 'youtube',        field2col)
     demographic = _cast(row, 'faixa',          field2col)
 
-    caseRecord[caseID] = (profile, averagevec, recommended, commentresp, commentreev, youtube, demographic)
+    caseRecord[caseID] = (profile, averagevec, recommended, commentresp, commentreev, youtube, youtubeok, demographic)
 
     for k in range(len(recommended)):
+
       (itemID, _) = recommended[k]
+
+      try:
+        linksOK = youtubeok[k]
+      except IndexError:
+        linksOK = 4
 
       # computes the S measurement
       s1 = _cast(row, 'resp1', field2col)[k]
       s2 = _cast(row, 'resp2', field2col)[k]
       s3 = _cast(row, 'resp3', field2col)[k]
       s4 = _cast(row, 'resp4', field2col)[k]
-      #S  = sum([4 * (1 - s1) + 1, 6 - s2, 6 - s3, s4])
 
       # xxx check this composition with factor analysis
-      S  = 0
-      S += 4 * (1 - s1) + 1
-      #S += 6 - s2
-      S += 6 - s3
-      S += s4
+      #S  = sum([4 * (1 - s1) + 1, 6 - s2, 6 - s3, s4])
+      S  = sum([4 * (1 - s1) + 1, 6 - s3, s4])
 
       # computes the I0 measurement
       i1 = _cast(row, 'resp5', field2col)[k]
@@ -1348,25 +1353,32 @@ def loadSurveyData(sourcepath, surveyFile):
 
       # stores the measurements
       responses = (s1, s2, s3, s4, i1, i2, e1, e2, e3, e4, e5, x1, x2, x3)
-      measurements[caseID][itemID] = (S, I0, E, I1, X, responses)
+      measurements[caseID][itemID] = (S, I0, E, I1, X, linksOK, responses)
 
   # converts a defaultdict to standard dict
   measurements = dict(measurements)
 
   return (caseRecord, measurements)
 
-def applyQualityCriteria(caseRecord, rawMeasurements):
+def applyQualityCriteria(caseRecord, rawMeasurements, param_youtubeok):
 
   ECO_SIM_THRESHOLD = 2/3 #3/7
 
-  ECO_REJECT_C1 = 'C1. Invalid profile average vector'
-  ECO_REJECT_C2 = 'C2. Duplicated profile assumed as multiple participation'
-  ECO_REJECT_C3 = 'C3. Highly similar profile assumed as multiple participation'
-  ECO_REJECT_C4 = 'C4. Similar profile assumed as multiple participation'
-  ECO_REJECT_C5 = 'C5. Profile with identical song names assumed as multiple participation'
-  ECO_REJECT_C6 = 'C6. Profile with identical artist line up assumed as multiple participation'
-  ECO_REJECT_D1 = 'D1. Invalid value in response collected in Task 3a'
-  ECO_REJECT_D2 = 'D2. Invalid value in response collected in Task 3c'
+  ECO_REJECT_C1 = 'C1. Case with invalid profile average vector'
+
+  # multiple participation:
+  ECO_REJECT_C2 = 'C2. Replica from case with duplicated profile'
+  ECO_REJECT_C3 = 'C3. Replica from case with highly similar profile'
+  ECO_REJECT_C4 = 'C4. Replica from case with similar profile'
+  ECO_REJECT_C5 = 'C5. Replica from case with profile with identical song names'
+  ECO_REJECT_C6 = 'C6. Replica from case with profile with identical artist line up'
+
+  # wrongly-encoded response
+  ECO_REJECT_D1 = 'D1. Replica with invalid value in response collected in Task 3a'
+  ECO_REJECT_D2 = 'D2. Replica with invalid value in response collected in Task 3c'
+
+  # wrongly-rendered display
+  ECO_REJECT_E1 = 'E1. Replica with mismatch between Spotify and Youtube references'
 
   def similarity(e, S, _cast = None):
     if(len(S) > 0):
@@ -1389,32 +1401,37 @@ def applyQualityCriteria(caseRecord, rawMeasurements):
   list2art     = lambda s: set(['{0}'.format(e[3].lower())                   for e in s])
 
   for caseID in caseRecord:
-    (profile, averagevec, recommended, commentresp, commentreev, youtube, demographic) = caseRecord[caseID]
+    (profile, averagevec, recommended, commentresp, commentreev, youtube, youtubeok, demographic) = caseRecord[caseID]
 
     if(averagevec.shape[0] != 1 or averagevec.shape[1] != 15):
-      rejected[caseID] = ECO_REJECT_C1
+      rejected[(caseID, ECO_ALLREPLICAS)] = ECO_REJECT_C1
 
     elif(similarity(profile, previousProfiles)               == 1.0):
-      rejected[caseID] = ECO_REJECT_C2
+      for (itemID, _) in recommended:
+        rejected[(caseID, itemID)] = ECO_REJECT_C2
 
     elif(similarity(profile, previousProfiles)               >= ECO_SIM_THRESHOLD):
-      rejected[caseID] = ECO_REJECT_C3
+      for (itemID, _) in recommended:
+        rejected[(caseID, itemID)] = ECO_REJECT_C3
 
     elif(similarity(profile, previousProfiles, list2songart) >= ECO_SIM_THRESHOLD):
-      rejected[caseID] = ECO_REJECT_C4
+      for (itemID, _) in recommended:
+        rejected[(caseID, itemID)] = ECO_REJECT_C4
 
     elif(similarity(profile, previousProfiles, list2song)    >= ECO_SIM_THRESHOLD):
-      rejected[caseID] = ECO_REJECT_C5
+      for (itemID, _) in recommended:
+        rejected[(caseID, itemID)] = ECO_REJECT_C5
 
     elif(similarity(profile, previousProfiles, list2art)     == ECO_SIM_THRESHOLD):
-      rejected[caseID] = ECO_REJECT_C6
+      for (itemID, _) in recommended:
+        rejected[(caseID, itemID)] = ECO_REJECT_C6
 
     else:
 
       # checks encoded responses
       for itemID in rawMeasurements[caseID]:
 
-        (S, I0, E, I1, X, responses) = rawMeasurements[caseID][itemID]
+        (S, I0, E, I1, X, linksOK, responses) = rawMeasurements[caseID][itemID]
         (s1, s2, s3, s4, i1, i2, e1, e2, e3, e4, e5, x1, x2, x3) = responses
 
         if(s1 not in [0, 1]   or
@@ -1424,22 +1441,34 @@ def applyQualityCriteria(caseRecord, rawMeasurements):
               not isValid(i1) or
               not isValid(i2)):
 
-          rejected[caseID] = ECO_REJECT_D1
+          rejected[(caseID, itemID)] = ECO_REJECT_D1
 
         elif(E.sum() > 0 and (not isValid(x1) or
                               not isValid(x2) or
                               not isValid(x3))):
 
-          rejected[caseID] = ECO_REJECT_D2
+          rejected[(caseID, itemID)] = ECO_REJECT_D2
+
+        elif(linksOK not in param_youtubeok):
+          rejected[(caseID, itemID)] = ECO_REJECT_E1
 
     previousProfiles.append(set(profile))
 
-  measurements = {}
+  # filters the rejected replicas out of the raw data
+  (accepted, discarded) = (0, 0)
+  measurements = defaultdict(dict)
   for caseID in rawMeasurements:
-    if caseID not in rejected:
-      measurements[caseID] = rawMeasurements[caseID]
+    for itemID in rawMeasurements[caseID]:
+      if((caseID, itemID)          not in rejected and
+         (caseID, ECO_ALLREPLICAS) not in rejected):
+        accepted += 1
+        measurements[caseID][itemID] = rawMeasurements[caseID][itemID]
+      else:
+        discarded += 1
 
-  return (rejected, measurements)
+  measurements = dict(measurements)
+
+  return (rejected, measurements, accepted, discarded)
 
 def measurements2text(measurements):
 
@@ -1448,7 +1477,7 @@ def measurements2text(measurements):
   content = [header]
   for caseID in measurements:
     for itemID in measurements[caseID]:
-      (S, I0, E, I1, X, _) = measurements[caseID][itemID]
+      (S, I0, E, I1, X, _, _) = measurements[caseID][itemID]
       content.append(mask.format(caseID,
                                  itemID,
                                  S,
@@ -1473,11 +1502,10 @@ def testHypotheses(measurements):
   sample1 = []
   for caseID in measurements:
     for itemID in measurements[caseID]:
-      (S, I0, E, I1, X, responses) = measurements[caseID][itemID]
+      (S, I0, E, I1, X, linksOK, responses) = measurements[caseID][itemID]
       #epsilon = (-1)**randint(0,1) * randint(0,3)
       #sample1.append((S, .2*S + 1 + epsilon))
       sample1.append((S, E.sum()))
-  #sample1=set(sample1)
 
   # fits a linear model to the survey data and assess the hypothesis
   (S_, E_) = zip(*sample1)
@@ -1553,7 +1581,7 @@ def testHypotheses(measurements):
   sample2 = []
   for caseID in measurements:
     for itemID in measurements[caseID]:
-      (S, I0, E, I1, X, responses) = measurements[caseID][itemID]
+      (S, I0, E, I1, X, linksOK, responses) = measurements[caseID][itemID]
       sample2.append((E[:,0].sum(), E[:,1].sum(), E[:,2].sum(), E[:,3].sum(), E[:,4].sum()))
 
   categories = list(zip(*sample2))
