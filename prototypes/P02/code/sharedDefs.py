@@ -1534,7 +1534,7 @@ def testHypotheses(measurements):
     repeats[(s,e)] += ECO_POINT_SIZE
   (ss, ee, size) = zip(*[(s, e, repeats[(s,e)]) for (s,e) in repeats])
 
-  fig, ax = plt.subplots(figsize=(9, 9))
+  fig, ax = plt.subplots(figsize=(7.17, 7.23))
   ax.scatter(ss, ee, size)
 
   ax.plot([0, xmax], [rei.lower_bound, rea.lower_bound * xmax + rei.lower_bound], 'g:')
@@ -1546,16 +1546,16 @@ def testHypotheses(measurements):
 
   ax.set_xlabel('Reported surprise (S)', fontsize=12)
   ax.set_ylabel('# clicks on additional information (E)', fontsize=12)
-  ax.set_title('Hypothesis H1: Association between Reported Surprise (S) and Information Sought (E)', fontsize=14)
+  ax.set_title('Association between Reported Surprise (S) and \nInformation Sought (E)', fontsize=14)
 
   #xxx legend
 
   ax.grid(True)
   fig.tight_layout()
 
-  #print('-- rendering the plot.')
+  print('-- rendering the plot.')
   plt.show()
-  #print('   figure width is {0} and height is {1}'.format(fig.get_figwidth(), fig.get_figheight()))
+  print('   figure width is {0} and height is {1}'.format(fig.get_figwidth(), fig.get_figheight()))
 
 
   #-------------------------------------------------------------------------
@@ -1604,13 +1604,70 @@ def testHypotheses(measurements):
     assessments['H2'] = 'There is no preferred category of additional information: {0}'.format(best)
 
   tsprint('   H2\t{0}'.format(assessments['H2']))
+
   #-------------------------------------------------------------------------------------
   # test hypothesis H3: There is an effect of explanation (E) on intention to follow (I)
   #-------------------------------------------------------------------------------------
+  tsprint('-- assessing hypothesis H3')
+  sample3 = []
+  for caseID in measurements:
+    for itemID in measurements[caseID]:
+      (S, I0, E, I1, X, linksOK, responses) = measurements[caseID][itemID]
+      (s1, s2, s3, s4, i1, i2, e1, e2, e3, e4, e5, x1, x2, x3) = responses
+      # DI is only defined if the participant has clicked on one or more links to additional info
+      if(E.sum() > 0):
+        DI = (x1 + x2) - (i1 + i2)
+        sample3.append((E.sum(), DI))
 
-  # xxx data to assess this hypotheses was not collected
-  assessments['H3'] = 'Hypothesis not assessed.'
+  # fits a linear model to the survey data and assess the hypothesis
+  (E_, DI_) = zip(*sample3)
+  xmax = max(E_)
+  res  = stats.linregress(E_, DI_)
+  if(res.pvalue <= 0.05):
+    assessments['H3'] = 'The data support the hypothesis of linear association between Information Sought (E) and Change in Intention to Follow Recommendation (∆I); p-value {0:6.4f}, slope {1:6.4f}, intercept {2:6.4f}'.format(res.pvalue, res.slope, res.intercept)
+  else:
+    assessments['H3'] = 'The data do not support the hypothesis of linear association between Information Sought (E) and Change in Intention to Follow Recommendation (∆I): p-value {0:6.4f}, slope {1:6.4f}, intercept {2:6.4f}'.format(res.pvalue, res.slope, res.intercept)
   tsprint('   H3\t{0}'.format(assessments['H3']))
+
+  # obtains bootstrap estimate of parameters of the linear model
+  samparams = []
+  for _ in range(ECO_BOOTSS):
+    resample = sample(sample3, int(len(sample3) * ECO_RESS))
+    (e_, di_) = zip(*resample)
+    aux = stats.linregress(e_, di_)
+    samparams.append((aux.slope, aux.intercept))
+  (alphas, intercepts) = zip(*samparams)
+  rea = bs.bootstrap(np.array(alphas),     stat_func=bs_stats.mean)
+  rei = bs.bootstrap(np.array(intercepts), stat_func=bs_stats.mean)
+
+  # plots the results
+  repeats = defaultdict(int)
+  for (e,di) in sample3:
+    repeats[(e,di)] += ECO_POINT_SIZE
+  (ee, ii, size) = zip(*[(e, di, repeats[(e,di)]) for (e,di) in repeats])
+
+  fig, ax = plt.subplots(figsize=(7.96, 8.52))
+  ax.scatter(ee, ii, size)
+
+  ax.plot([0, xmax], [rei.lower_bound, rea.lower_bound * xmax + rei.lower_bound], 'g:')
+  ax.plot([0, xmax], [rei.upper_bound, rea.lower_bound * xmax + rei.upper_bound], 'g:')
+  ax.plot([0, xmax], [rei.lower_bound, rea.upper_bound * xmax + rei.lower_bound], 'g:')
+  ax.plot([0, xmax], [rei.upper_bound, rea.upper_bound * xmax + rei.upper_bound], 'g:')
+
+  ax.plot([0, xmax], [res.intercept,   res.slope       * xmax + res.intercept],   'r-')
+
+  ax.set_xlabel('# clicks on additional information (E)', fontsize=12)
+  ax.set_ylabel('Change in Intention to Follow Recommendation (∆I)', fontsize=12)
+  ax.set_title('Association between Information Sought (E) and \nChange in Intention to Follow Recommendation (∆I)', fontsize=14)
+
+  #xxx legend
+
+  ax.grid(True)
+  fig.tight_layout()
+
+  print('-- rendering the plot.')
+  plt.show()
+  print('   figure width is {0} and height is {1}'.format(fig.get_figwidth(), fig.get_figheight()))
 
   return assessments
 

@@ -27,10 +27,10 @@ def main(configFile):
 
   # loads required data
   tsprint('Loading preprocessed data')
-  features = deserialise(join(*param_targetpath, 'features'))
-  id2name  = deserialise(join(*param_targetpath, 'id2name'))
-  name2id  = deserialise(join(*param_targetpath, 'name2id'))
-  reverso  = deserialise(join(*param_targetpath, 'reverso'))
+  #features = deserialise(join(*param_targetpath, 'features'))
+  #id2name  = deserialise(join(*param_targetpath, 'id2name'))
+  #name2id  = deserialise(join(*param_targetpath, 'name2id'))
+  #reverso  = deserialise(join(*param_targetpath, 'reverso'))
 
   # loads the collected data
   tsprint('Loading survey data')
